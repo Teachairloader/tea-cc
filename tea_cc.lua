@@ -187,7 +187,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-24j"
+local VERSION = "2026-10-24k"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -265,12 +265,23 @@ y = block(main, "misc", 1, y, "fake macro", {
     { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
     { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
 })
+y = block(main, "misc", 1, y, "legit macro", {
+    { k = "toggle", n = "enabled", f = "legit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "legit_key", d = Enum.KeyCode.X },
+    { k = "slider", n = "delay", f = "legit_delay", min = 0, max = 200, d = 0, suffix = "ms" },
+})
 
 y = 0
 y = block(main, "misc", 2, y, "interface", {
     { k = "toggle", n = "watermark", f = "ui_watermark", d = false },
     { k = "toggle", n = "keybind list", f = "ui_keybind_list", d = false },
     { k = "slider", n = "menu scale", f = "ui_scale", min = 80, max = 120, d = 100, suffix = "%" },
+})
+y = block(main, "misc", 2, y, "crosshair", {
+    { k = "toggle", n = "enabled", f = "crosshair_enabled", d = false },
+    { k = "colorpicker", n = "colour", f = "crosshair_color", d = Color3.fromRGB(255, 121, 198) },
+    { k = "toggle", n = "spin", f = "crosshair_spin", d = true },
+    { k = "toggle", n = "resize", f = "crosshair_resize", d = true },
 })
 
 -- configs (juju's own config list, info and editor) ---------------------
@@ -287,6 +298,7 @@ print("[tea.cc] build " .. VERSION .. " loaded - aim key " .. tostring(flags["ai
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local Workspace = workspace
 local Client = Players.LocalPlayer
 
@@ -1058,6 +1070,144 @@ function Walkspeed.step()
 end
 
 
+-- ------------------------------------------------------------- legit macro ---
+-- Mouse wheel down/up on a Heartbeat cadence, toggled from the bound key. The
+-- wheel is the input the game reads for the emote/weapon flip this imitates.
+-- delay stretches the gap between the down and the up; 0 keeps the source's
+-- one-heartbeat spacing.
+local Legit = { active = false }
+
+do
+    local vim = game:GetService("VirtualInputManager")
+
+    local function wheel(down)
+        vim:SendMouseWheelEvent(0.1, 0.1, down, game)
+    end
+
+    local function loop()
+        while Legit.active do
+            if not fget("legit_enabled", false) then
+                Legit.active = false
+                break
+            end
+
+            RunService.Heartbeat:Wait()
+            wheel(true)
+
+            local delay = fget("legit_delay", 0) / 1000
+            if delay > 0 then
+                task.wait(delay)
+            end
+
+            RunService.Heartbeat:Wait()
+            wheel(false)
+            RunService.Heartbeat:Wait()
+        end
+    end
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then
+            return
+        end
+        if not fget("legit_enabled", false) then
+            return
+        end
+        if input.KeyCode ~= key_of(fget("legit_key", Enum.KeyCode.X)) then
+            return
+        end
+
+        if Legit.active then
+            Legit.active = false
+        else
+            Legit.active = true
+            task.spawn(loop)
+        end
+    end)
+
+    getgenv().TeaLegit = Legit
+end
+
+-- ---------------------------------------------------------------- crosshair ---
+-- Spinning, breathing four-line crosshair. Mouse-anchored, pink by default,
+-- no label text under it. Everything the source had as a constant is a flag.
+local Crosshair = {}
+
+do
+    local ready = typeof(Drawing) == "table" and type(Drawing.new) == "function"
+    local lines = {}
+
+    if ready then
+        for index = 1, 8 do
+            local line = Drawing.new("Line")
+            line.Visible = false
+            line.Thickness = 1.5
+            lines[index] = line
+        end
+    end
+
+    local function solve(angle, radius)
+        return Vector2.new(
+            math.sin(math.rad(angle)) * radius,
+            math.cos(math.rad(angle)) * radius
+        )
+    end
+
+    function Crosshair.step()
+        if not ready then
+            return
+        end
+
+        local enabled = fget("crosshair_enabled", false)
+
+        for index = 1, 8 do
+            lines[index].Visible = enabled
+        end
+
+        if not enabled or not Workspace.CurrentCamera then
+            return
+        end
+
+        local colour = flags["crosshair_color"] or Color3.fromRGB(255, 121, 198)
+        local position = UserInputService:GetMouseLocation()
+        local now = tick()
+
+        local radius = 11
+        local width = 1.5
+        local length = 10
+
+        for index = 1, 4 do
+            local outline = lines[index]
+            local inline = lines[index + 4]
+            local angle = (index - 1) * 90
+
+            if fget("crosshair_spin", true) then
+                local spin = -now * 150 % 340
+                angle = angle
+                    + TweenService:GetValue(
+                        spin / 360,
+                        Enum.EasingStyle.Sine,
+                        Enum.EasingDirection.InOut
+                    ) * 360
+            end
+
+            if fget("crosshair_resize", true) then
+                local stretch = now * 150 % 180
+                length = 5 + math.sin(math.rad(stretch)) * 22
+            end
+
+            inline.Color = colour
+            inline.From = position + solve(angle, radius)
+            inline.To = position + solve(angle, radius + length)
+            inline.Thickness = width
+
+            outline.Color = colour
+            outline.From = position + solve(angle, radius - 1)
+            outline.To = position + solve(angle, radius + length + 1)
+            outline.Thickness = width + 1.5
+        end
+    end
+end
+
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
 -- the camera-priority step, so a CFrame written there is overwritten before
@@ -1068,6 +1218,7 @@ getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.sweep_hitboxes()
     Avatar.step()
     Walkspeed.step()
+    Crosshair.step()
 end)
 
 -- ------------------------------------------------------------------ unload ---
