@@ -193,11 +193,10 @@ y = block(main, "combat", 1, y, "aimbot", {
     { k = "slider", n = "y offset", f = "aim_y_offset", min = -3, max = 3, d = -0.6, dec = 2 },
     { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 120 },
     { k = "toggle", n = "visualise fov", f = "aim_fov_visualise", d = false },
-    { k = "slider", n = "smoothing", f = "aim_smooth", min = 0, max = 100, d = 100 },
+    { k = "slider", n = "smoothing", f = "aim_smooth", min = 0, max = 100, d = 0 },
     { k = "slider", n = "prediction", f = "aim_prediction", min = 0, max = 0.3, d = 0, dec = 3 },
     { k = "toggle", n = "wall check", f = "aim_wall_check", d = false },
     { k = "toggle", n = "team check", f = "aim_team_check", d = false },
-    { k = "slider", n = "hit chance", f = "aim_hit_chance", min = 0, max = 100, d = 100, suffix = "%" },
 })
 
 y = 0
@@ -355,6 +354,13 @@ local function key_down(binding)
         return false
     end
     return UserInputService:IsKeyDown(key)
+end
+
+-- juju reloads the last saved config on boot, so a binding saved by an older
+-- build outlives a default change. Only a missing or unusable binding is
+-- rewritten here - a deliberate rebind is left alone.
+if not key_of(flags["aim_key"]) then
+    flags["aim_key"] = Enum.KeyCode.Q
 end
 
 -- ------------------------------------------------------------------ aimbot ---
@@ -578,21 +584,22 @@ do
             return
         end
 
-        if math.random() * 100 > fget("aim_hit_chance", 100) then
-            return
-        end
-
         local lock_position = part.Position
             + velocity_of(part) * fget("aim_prediction", 0)
             + Vector3.new(0, fget("aim_y_offset", -0.6), 0)
 
-        local smooth = math.clamp(fget("aim_smooth", 100) / 100, 0.01, 1)
+        local smooth = math.clamp(fget("aim_smooth", 0) / 100, 0, 1)
         local goal = CFrame.new(camera.CFrame.Position, lock_position)
 
-        if smooth >= 1 then
+        -- 0 is the raw snap, identical to CFrame.new(pos, lock_pos). Anything
+        -- above it damps the angular step: the exponent keeps the low end
+        -- responsive so 10 still tracks a strafing target, while 100 crawls
+        -- in over roughly half a second, which is where it reads as legit.
+        if smooth <= 0 then
             camera.CFrame = goal
         else
-            local alpha = 1 - (1 - smooth) ^ (dt * 60)
+            local base = 1 - (smooth ^ 0.6) * 0.97
+            local alpha = 1 - (1 - base) ^ (dt * 60)
             camera.CFrame = camera.CFrame:Lerp(goal, alpha)
         end
     end
