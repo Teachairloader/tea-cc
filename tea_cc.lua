@@ -178,6 +178,13 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
+-- Seed the binding before the widget is constructed. juju's keybind element
+-- renders whatever the flag already holds, so a nil flag draws as "none" and
+-- the widget's own `default` never reaches the display.
+flags["aim_key"] = flags["aim_key"] or Enum.KeyCode.Q
+
+local VERSION = "2026-10-24d"
+
 local main = menu.create_group("main")
 main:create_tab("combat")
 main:create_tab("visuals")
@@ -272,6 +279,8 @@ y = block(main, "misc", 2, y, "interface", {
 pcall(function()
     menu:setup_configs("settings")
 end)
+
+print("[tea.cc] build " .. VERSION .. " loaded - aim key " .. tostring(flags["aim_key"]))
 
 -- ================================================================== runtime ===
 -- Every feature below reads juju's flags live. Nothing here hard-codes a value
