@@ -187,7 +187,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-24g"
+local VERSION = "2026-10-24h"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -241,22 +241,12 @@ y = block(main, "visuals", 1, y, "player esp", {
     { k = "toggle", n = "held tool", f = "esp_tool", d = false },
     { k = "slider", n = "max distance", f = "esp_max_distance", min = 0, max = 2000, d = 500 },
 })
-y = block(main, "visuals", 1, y, "item esp", {
-    { k = "toggle", n = "knives", f = "items_knives", d = false },
-    { k = "toggle", n = "armor", f = "items_armor", d = false },
-    { k = "toggle", n = "ammo", f = "items_ammo", d = false },
-    { k = "slider", n = "range", f = "items_range", min = 0, max = 2000, d = 500 },
-})
 
 y = 0
 y = block(main, "visuals", 2, y, "world", {
     { k = "toggle", n = "fullbright", f = "world_fullbright", d = false },
     { k = "toggle", n = "remove fog", f = "world_no_fog", d = false },
     { k = "slider", n = "time of day", f = "world_time", min = 0, max = 24, d = 14, dec = 1 },
-})
-y = block(main, "visuals", 2, y, "fov changer", {
-    { k = "toggle", n = "enabled", f = "cam_enabled", d = false },
-    { k = "slider", n = "field of view", f = "cam_fov", min = 40, max = 180, d = 120, dec = 1 },
 })
 
 -- misc -----------------------------------------------------------------
@@ -273,9 +263,7 @@ y = block(main, "misc", 1, y, "avatar", {
 })
 y = block(main, "misc", 1, y, "fake macro", {
     { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
-    { k = "keybind", n = "bind", f = "macro_key", d = Enum.KeyCode.E },
-    { k = "slider", n = "speed", f = "macro_speed", min = 1, max = 100, d = 20 },
-    { k = "slider", n = "hold", f = "macro_hold", min = 1, max = 200, d = 20, suffix = "ms" },
+    { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
 })
 
 y = 0
@@ -1039,73 +1027,36 @@ do
     end
 end
 
--- ---------------------------------------------------------------- fake macro ---
--- Fires the bound key at the configured rate. The press and the release are
--- separated by a real hold window: sending both in the same frame means the
--- game polls the key as never held, which is why the first cut did nothing.
-local Macro = { active = false, pressed = nil }
+-- --------------------------------------------------------------- walkspeed ---
+-- Written into the fake macro slot. Reasserted every frame because the game
+-- rewrites WalkSpeed on respawn, on ragdoll and on any server-side speed
+-- correction, and restored to the captured value the moment the toggle drops.
+local Walkspeed = { humanoid = nil, original = nil }
 
-do
-    local vim = game:GetService("VirtualInputManager")
+function Walkspeed.step()
+    local character = Client.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local wanted = fget("macro_enabled", false) and humanoid
 
-    local function press(key)
-        if type(keypress) == "function" then
-            pcall(keypress, key)
-        else
-            vim:SendKeyEvent(true, key, false, game)
+    if wanted then
+        if Walkspeed.humanoid ~= humanoid then
+            Walkspeed.humanoid = humanoid
+            Walkspeed.original = humanoid.WalkSpeed
         end
-    end
 
-    local function release(key)
-        if type(keyrelease) == "function" then
-            pcall(keyrelease, key)
-        else
-            vim:SendKeyEvent(false, key, false, game)
+        local speed = fget("macro_walkspeed", 100)
+        if humanoid.WalkSpeed ~= speed then
+            humanoid.WalkSpeed = speed
         end
-    end
-
-    function Macro.press(key)
-        Macro.pressed = key
-        press(key)
-    end
-
-    function Macro.release()
-        if Macro.pressed then
-            release(Macro.pressed)
-            Macro.pressed = nil
+    elseif Walkspeed.humanoid then
+        if Walkspeed.humanoid.Parent and Walkspeed.original then
+            Walkspeed.humanoid.WalkSpeed = Walkspeed.original
         end
-    end
-
-    function Macro.step()
-        local wanted = fget("macro_enabled", false)
-
-        if wanted and not Macro.active then
-            Macro.active = true
-            task.spawn(function()
-                while Macro.active do
-                    local key = key_of(fget("macro_key", Enum.KeyCode.E))
-                    if not key then
-                        task.wait(0.1)
-                    else
-                        local interval = 1 / math.max(fget("macro_speed", 20), 1)
-                        local hold = math.min(
-                            fget("macro_hold", 20) / 1000,
-                            math.max(interval * 0.5, 0.001)
-                        )
-
-                        Macro.press(key)
-                        task.wait(hold)
-                        Macro.release()
-                        task.wait(math.max(interval - hold, 0.001))
-                    end
-                end
-            end)
-        elseif not wanted and Macro.active then
-            Macro.active = false
-            Macro.release()
-        end
+        Walkspeed.humanoid = nil
+        Walkspeed.original = nil
     end
 end
+
 
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
@@ -1116,7 +1067,7 @@ getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
     Avatar.step()
-    Macro.step()
+    Walkspeed.step()
 end)
 
 -- ------------------------------------------------------------------ unload ---
@@ -1129,8 +1080,12 @@ getgenv().TeaUnload = function()
     end)
     pcall(getgenv().TeaHitboxRestore)
     getgenv().is_firing = false
-    Macro.active = false
-    Macro.release()
+
+    if Walkspeed.humanoid and Walkspeed.humanoid.Parent and Walkspeed.original then
+        Walkspeed.humanoid.WalkSpeed = Walkspeed.original
+    end
+    Walkspeed.humanoid = nil
+    Walkspeed.original = nil
 end
 
 -- ----------------------------------------------------------------- finish ---
