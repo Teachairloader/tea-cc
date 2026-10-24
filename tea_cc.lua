@@ -181,7 +181,6 @@ end
 local main = menu.create_group("main")
 main:create_tab("combat")
 main:create_tab("visuals")
-main:create_tab("players")
 main:create_tab("misc")
 
 -- combat ---------------------------------------------------------------
@@ -193,7 +192,7 @@ y = block(main, "combat", 1, y, "aimbot", {
     { k = "dropdown", n = "hit part", f = "aim_hit_part", o = { "Head", "Torso", "Closest Part", "Nearest Bone" }, d = { "Head" }, req = true },
     { k = "slider", n = "y offset", f = "aim_y_offset", min = -3, max = 3, d = -0.6, dec = 2 },
     { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 120 },
-    { k = "toggle", n = "visualise fov", f = "aim_fov_visualise", d = true },
+    { k = "toggle", n = "visualise fov", f = "aim_fov_visualise", d = false },
     { k = "slider", n = "smoothing", f = "aim_smooth", min = 0, max = 100, d = 100 },
     { k = "slider", n = "prediction", f = "aim_prediction", min = 0, max = 0.3, d = 0, dec = 3 },
     { k = "toggle", n = "wall check", f = "aim_wall_check", d = false },
@@ -250,15 +249,6 @@ y = block(main, "visuals", 2, y, "fov changer", {
     { k = "slider", n = "field of view", f = "cam_fov", min = 40, max = 180, d = 120, dec = 1 },
 })
 
--- players --------------------------------------------------------------
-y = 0
-y = block(main, "players", 2, y, "esp preview", {
-    { k = "toggle", n = "show preview", f = "esp_preview", d = true },
-    { k = "toggle", n = "show health bar", f = "esp_preview_health", d = true },
-    { k = "toggle", n = "show distance", f = "esp_preview_distance", d = true },
-    { k = "toggle", n = "show held tool", f = "esp_preview_tool", d = false },
-})
-
 -- misc -----------------------------------------------------------------
 y = 0
 y = block(main, "misc", 1, y, "skin changer", {
@@ -267,10 +257,9 @@ y = block(main, "misc", 1, y, "skin changer", {
     { k = "colorpicker", n = "skin colour", f = "skin_color" },
     { k = "slider", n = "transparency", f = "skin_transparency", min = 0, max = 1, d = 0.45, dec = 2 },
 })
-y = block(main, "misc", 1, y, "teleports", {
-    { k = "dropdown", n = "destination", f = "tp_destination", o = { "Bank", "Jewelry Store", "Sewer", "Gas Station", "Spawn" }, d = { "Bank" }, req = true },
-    { k = "toggle", n = "use hotkey", f = "tp_key_enabled", d = false },
-    { k = "keybind", n = "teleport key", f = "tp_key", d = Enum.KeyCode.T },
+y = block(main, "misc", 1, y, "avatar", {
+    { k = "toggle", n = "aura", f = "avatar_aura", d = false },
+    { k = "toggle", n = "china hat", f = "avatar_china_hat", d = false },
 })
 
 y = 0
@@ -553,7 +542,7 @@ do
         if circle then
             circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
             circle.Radius = fget("aim_fov", 120)
-            circle.Visible = fget("aim_enabled", true) and fget("aim_fov_visualise", true)
+            circle.Visible = fget("aim_enabled", true) and fget("aim_fov_visualise", false)
         end
 
         if not fget("aim_enabled", true) then
@@ -817,6 +806,213 @@ do
     end
 end
 
+-- ------------------------------------------------------------------ avatar ---
+-- Aura and china hat, both rebuilt against the live character so a respawn
+-- cannot leave a stale instance welded to a dead head. Flag off destroys.
+local Avatar = {}
+
+do
+    local Aura = { instance = nil }
+    local Hat = { instance = nil }
+
+    local function aura_anchor(character)
+        return character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+    end
+
+    local function build_aura(character)
+        local anchor = aura_anchor(character)
+        if not anchor then
+            return nil
+        end
+
+        local attachment = Instance.new("Attachment")
+        attachment.Name = "TeaAura"
+
+        local healing_one = Instance.new("ParticleEmitter")
+        healing_one.Name = "Healing Wave 1"
+        healing_one.Lifetime = NumberRange.new(1.5, 1.5)
+        healing_one.SpreadAngle = Vector2.new(10, -10)
+        healing_one.LockedToPart = true
+        healing_one.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.1702454, 0.7, 0.014881),
+            NumberSequenceKeypoint.new(0.2254601, 0.03125, 0.03125),
+            NumberSequenceKeypoint.new(0.2852761, 0),
+            NumberSequenceKeypoint.new(0.702454, 0),
+            NumberSequenceKeypoint.new(0.8374233, 0.9125, 0.0601461),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        healing_one.LightEmission = 0.4
+        healing_one.Color = ColorSequence.new(Color3.fromRGB(234, 8, 255))
+        healing_one.VelocitySpread = 10
+        healing_one.Speed = NumberRange.new(3, 6)
+        healing_one.Brightness = 10
+        healing_one.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 3.0624998, 1.8805969),
+            NumberSequenceKeypoint.new(0.6420546, 1.9999999, 1.7619393),
+            NumberSequenceKeypoint.new(1, 0.7499999, 0.7499999),
+        })
+        healing_one.Rate = 20
+        healing_one.Texture = "rbxassetid://8047533775"
+        healing_one.RotSpeed = NumberRange.new(200, 400)
+        healing_one.Rotation = NumberRange.new(-180, 180)
+        healing_one.Orientation = Enum.ParticleOrientation.VelocityPerpendicular
+        healing_one.Parent = attachment
+
+        local healing_two = Instance.new("ParticleEmitter")
+        healing_two.Name = "Healing Wave 2"
+        healing_two.Lifetime = NumberRange.new(1.5, 1.5)
+        healing_two.SpreadAngle = Vector2.new(10, -10)
+        healing_two.LockedToPart = true
+        healing_two.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.2254601, 0.03125, 0.03125),
+            NumberSequenceKeypoint.new(0.6288344, 0.25625, 0.0593491),
+            NumberSequenceKeypoint.new(0.8374233, 0.9125, 0.0601461),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        healing_two.LightEmission = 1
+        healing_two.Color = ColorSequence.new(Color3.fromRGB(238, 3, 255))
+        healing_two.VelocitySpread = 10
+        healing_two.Speed = NumberRange.new(3, 5)
+        healing_two.Brightness = 10
+        healing_two.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 3.125),
+            NumberSequenceKeypoint.new(0.4165329, 1.3749999, 1.3749999),
+            NumberSequenceKeypoint.new(1, 0.9375, 0.9375),
+        })
+        healing_two.Rate = 20
+        healing_two.Texture = "rbxassetid://8047796070"
+        healing_two.RotSpeed = NumberRange.new(100, 300)
+        healing_two.Rotation = NumberRange.new(-180, 180)
+        healing_two.Orientation = Enum.ParticleOrientation.VelocityPerpendicular
+        healing_two.Parent = attachment
+
+        local sparks = Instance.new("ParticleEmitter")
+        sparks.Name = "Sparks"
+        sparks.Lifetime = NumberRange.new(0.5, 2)
+        sparks.SpreadAngle = Vector2.new(180, -180)
+        sparks.LightEmission = 1
+        sparks.Color = ColorSequence.new(Color3.fromRGB(255, 21, 255))
+        sparks.Drag = 3
+        sparks.VelocitySpread = 180
+        sparks.Speed = NumberRange.new(5, 15)
+        sparks.Brightness = 10
+        sparks.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.14687, 0.4374999, 0.1875001),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        sparks.Acceleration = Vector3.new(0, 3, 0)
+        sparks.ZOffset = -1
+        sparks.Rate = 40
+        sparks.Texture = "rbxassetid://8611887361"
+        sparks.RotSpeed = NumberRange.new(-30, 30)
+        sparks.Orientation = Enum.ParticleOrientation.VelocityParallel
+        sparks.Parent = attachment
+
+        local star_sparks = Instance.new("ParticleEmitter")
+        star_sparks.Name = "Star Sparks"
+        star_sparks.Lifetime = NumberRange.new(1.5, 1.5)
+        star_sparks.SpreadAngle = Vector2.new(180, -180)
+        star_sparks.LightEmission = 1
+        star_sparks.Color = ColorSequence.new(Color3.fromRGB(226, 60, 255))
+        star_sparks.Drag = 3
+        star_sparks.VelocitySpread = 180
+        star_sparks.Speed = NumberRange.new(5, 10)
+        star_sparks.Brightness = 10
+        star_sparks.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.1492777, 0.6874996, 0.6874996),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        star_sparks.Acceleration = Vector3.new(0, 3, 0)
+        star_sparks.ZOffset = 2
+        star_sparks.Texture = "rbxassetid://8611887703"
+        star_sparks.RotSpeed = NumberRange.new(-30, 30)
+        star_sparks.Rotation = NumberRange.new(-30, 30)
+        star_sparks.Parent = attachment
+
+        attachment.Parent = anchor
+        return attachment
+    end
+
+    local function build_hat(character)
+        local head = character:FindFirstChild("Head")
+        if not head then
+            return nil
+        end
+
+        local cone = Instance.new("Part")
+        cone.Name = "TeaChinaHat"
+        cone.Size = Vector3.new(1, 1, 1)
+        cone.BrickColor = BrickColor.new("Hot pink")
+        cone.Material = Enum.Material.Neon
+        cone.Transparency = 0.2
+        cone.Anchored = false
+        cone.CanCollide = false
+        cone.Massless = true
+        cone.CastShadow = false
+        cone.Color = Color3.fromRGB(255, 105, 180)
+
+        local mesh = Instance.new("SpecialMesh")
+        mesh.MeshType = Enum.MeshType.FileMesh
+        mesh.MeshId = "rbxassetid://1033714"
+        mesh.Scale = Vector3.new(1.7, 1.1, 1.7)
+        mesh.Parent = cone
+
+        local weld = Instance.new("Weld")
+        weld.Part0 = head
+        weld.Part1 = cone
+        weld.C0 = CFrame.new(0, 0.9, 0)
+        weld.Parent = cone
+
+        local light = Instance.new("PointLight")
+        light.Color = Color3.fromRGB(255, 105, 180)
+        light.Brightness = 0
+        light.Range = 12
+        light.Shadows = true
+        light.Parent = cone
+
+        cone.Parent = character
+        return cone
+    end
+
+    function Avatar.step()
+        local character = Client.Character
+
+        local aura_wanted = fget("avatar_aura", false) and character
+        local aura_alive = Aura.instance
+            and Aura.instance.Parent
+            and Aura.instance.Parent == (character and aura_anchor(character))
+
+        if aura_wanted and not aura_alive then
+            if Aura.instance then
+                Aura.instance:Destroy()
+            end
+            Aura.instance = build_aura(character)
+        elseif not aura_wanted and Aura.instance then
+            Aura.instance:Destroy()
+            Aura.instance = nil
+        end
+
+        local hat_wanted = fget("avatar_china_hat", false) and character
+        local hat_alive = Hat.instance
+            and Hat.instance.Parent
+            and Hat.instance.Parent == character
+
+        if hat_wanted and not hat_alive then
+            if Hat.instance then
+                Hat.instance:Destroy()
+            end
+            Hat.instance = build_hat(character)
+        elseif not hat_wanted and Hat.instance then
+            Hat.instance:Destroy()
+            Hat.instance = nil
+        end
+    end
+end
+
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
 -- the camera-priority step, so a CFrame written there is overwritten before
@@ -825,6 +1021,7 @@ end
 getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
+    Avatar.step()
 end)
 
 -- ------------------------------------------------------------------ unload ---
