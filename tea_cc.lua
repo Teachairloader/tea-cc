@@ -187,7 +187,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-24e"
+local VERSION = "2026-10-24f"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -270,6 +270,11 @@ y = block(main, "misc", 1, y, "skin changer", {
 y = block(main, "misc", 1, y, "avatar", {
     { k = "toggle", n = "aura", f = "avatar_aura", d = false },
     { k = "toggle", n = "china hat", f = "avatar_china_hat", d = false },
+})
+y = block(main, "misc", 1, y, "fake macro", {
+    { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
+    { k = "keybind", n = "bind", f = "macro_key", d = Enum.KeyCode.E },
+    { k = "slider", n = "speed", f = "macro_speed", min = 1, max = 100, d = 20 },
 })
 
 y = 0
@@ -1033,6 +1038,46 @@ do
     end
 end
 
+-- ---------------------------------------------------------------- fake macro ---
+-- Fires the bound key at the configured rate. keypress/keyrelease when the
+-- executor exposes them, VirtualInputManager otherwise - the same synthetic
+-- input path every macro uses, no game hook.
+local Macro = { active = false }
+
+do
+    local vim = game:GetService("VirtualInputManager")
+
+    function Macro.press(key)
+        if type(keypress) == "function" and type(keyrelease) == "function" then
+            keypress(key)
+            keyrelease(key)
+            return
+        end
+
+        vim:SendKeyEvent(true, key, false, game)
+        vim:SendKeyEvent(false, key, false, game)
+    end
+
+    function Macro.step()
+        local wanted = fget("macro_enabled", false)
+
+        if wanted and not Macro.active then
+            Macro.active = true
+            task.spawn(function()
+                while Macro.active do
+                    local key = key_of(fget("macro_key", Enum.KeyCode.E))
+                    if key then
+                        pcall(Macro.press, key)
+                    end
+                    task.wait(1 / math.max(fget("macro_speed", 20), 1))
+                end
+            end)
+        elseif not wanted and Macro.active then
+            Macro.active = false
+        end
+    end
+end
+
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
 -- the camera-priority step, so a CFrame written there is overwritten before
@@ -1042,6 +1087,7 @@ getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
     Avatar.step()
+    Macro.step()
 end)
 
 -- ------------------------------------------------------------------ unload ---
@@ -1054,6 +1100,7 @@ getgenv().TeaUnload = function()
     end)
     pcall(getgenv().TeaHitboxRestore)
     getgenv().is_firing = false
+    Macro.active = false
 end
 
 -- ----------------------------------------------------------------- finish ---
