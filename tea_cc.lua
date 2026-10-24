@@ -13,10 +13,11 @@
     Title comes from getgenv().script_name, read at line ~769 during load, so
     it has to be set before the chunk runs.
 
-    This revision adds a runtime layer below the layout: aimbot (replaces
-    silent aim), triggerbot, rapid fire (driven by the user's own utility
-    source, now flag-driven), hitbox expander (reasserted every frame so the
-    game's own replication cannot shrink it back). Weapon section removed.
+    This revision adds a runtime layer below the layout: camlock aimbot with the
+    menu's own pink FOV ring (replaces silent aim), rapid fire (driven by the
+    user's own utility source, now flag-driven), hitbox expander (reasserted
+    every frame so the game's own replication cannot shrink it back). Weapon
+    and triggerbot sections removed.
 ]]
 
 local UI_URL = "https://raw.githubusercontent.com/panduh16/juju/main/ui.lua"
@@ -186,23 +187,18 @@ main:create_tab("misc")
 -- combat ---------------------------------------------------------------
 local y = 0
 y = block(main, "combat", 1, y, "aimbot", {
-    { k = "toggle", n = "enabled", f = "aim_enabled", d = false },
-    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.F },
-    { k = "dropdown", n = "mode", f = "aim_mode", o = { "Mouse", "Camera" }, d = { "Mouse" }, req = true },
-    { k = "slider", n = "smoothing", f = "aim_smooth", min = 0, max = 100, d = 25 },
-    { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 300 },
-    { k = "toggle", n = "visualise fov", f = "aim_fov_visualise", d = false },
+    { k = "toggle", n = "enabled", f = "aim_enabled", d = true },
+    { k = "dropdown", n = "activation", f = "aim_activation", o = { "Toggle", "Hold" }, d = { "Toggle" }, req = true },
+    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },
     { k = "dropdown", n = "hit part", f = "aim_hit_part", o = { "Head", "Torso", "Closest Part", "Nearest Bone" }, d = { "Head" }, req = true },
-    { k = "slider", n = "prediction", f = "aim_prediction", min = 0, max = 0.3, d = 0.15, dec = 3 },
-    { k = "toggle", n = "wall check", f = "aim_wall_check", d = true },
+    { k = "slider", n = "y offset", f = "aim_y_offset", min = -3, max = 3, d = -0.6, dec = 2 },
+    { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 120 },
+    { k = "toggle", n = "visualise fov", f = "aim_fov_visualise", d = true },
+    { k = "slider", n = "smoothing", f = "aim_smooth", min = 0, max = 100, d = 100 },
+    { k = "slider", n = "prediction", f = "aim_prediction", min = 0, max = 0.3, d = 0, dec = 3 },
+    { k = "toggle", n = "wall check", f = "aim_wall_check", d = false },
     { k = "toggle", n = "team check", f = "aim_team_check", d = false },
     { k = "slider", n = "hit chance", f = "aim_hit_chance", min = 0, max = 100, d = 100, suffix = "%" },
-})
-y = block(main, "combat", 1, y, "triggerbot", {
-    { k = "toggle", n = "enabled", f = "trigger_enabled", d = false },
-    { k = "keybind", n = "trigger key", f = "trigger_key", d = Enum.KeyCode.F },
-    { k = "slider", n = "fire rate", f = "trigger_rate", min = 1, max = 60, d = 20 },
-    { k = "slider", n = "crosshair range", f = "trigger_range", min = 5, max = 120, d = 35 },
 })
 
 y = 0
@@ -331,68 +327,59 @@ end
 -- juju writes keybinds as whatever the widget stored: an EnumItem, a table
 -- wrapping one, or the name. IsKeyDown explodes on anything but an EnumItem,
 -- so the shape is resolved here instead of at the call site.
-local function key_down(binding)
+local function key_of(binding)
     if typeof(binding) == "EnumItem" then
-        return UserInputService:IsKeyDown(binding)
+        return binding
     end
 
     if type(binding) == "table" then
         local inner = binding.key or binding[1] or binding.value
         if typeof(inner) == "EnumItem" then
-            return UserInputService:IsKeyDown(inner)
+            return inner
         end
         if type(inner) == "string" then
             local ok, item = pcall(function()
                 return Enum.KeyCode[inner]
             end)
-            if ok and item then
-                return UserInputService:IsKeyDown(item)
+            if ok then
+                return item
             end
         end
-        return false
+        return nil
     end
 
     if type(binding) == "string" then
         local ok, item = pcall(function()
             return Enum.KeyCode[binding]
         end)
-        if ok and item then
-            return UserInputService:IsKeyDown(item)
+        if ok then
+            return item
         end
     end
 
-    return false
+    return nil
+end
+
+local function key_down(binding)
+    local key = key_of(binding)
+    if not key then
+        return false
+    end
+    return UserInputService:IsKeyDown(key)
 end
 
 -- ------------------------------------------------------------------ aimbot ---
-local Aim = { player = nil, part = nil }
+local Aim = { player = nil, part = nil, locked = nil }
 
 do
-    local Camera = Workspace.CurrentCamera
-    local Mouse = Client:GetMouse()
     local BONE_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
-    local saved_camera_type = nil
-
-    -- A camera CFrame write is discarded by the default camera script unless
-    -- the type is Scriptable, which is why a plain lerp looks like no aim at
-    -- all. The original type is remembered and put back on release.
-    local function restore_camera()
-        if saved_camera_type and Camera then
-            pcall(function()
-                Camera.CameraType = saved_camera_type
-            end)
-        end
-        saved_camera_type = nil
-    end
-
-    getgenv().TeaRestoreCamera = restore_camera
 
     local circle = nil
     if typeof(Drawing) == "table" and type(Drawing.new) == "function" then
         local ok, created = pcall(Drawing.new, "Circle")
         if ok and created then
             circle = created
-            circle.Thickness = 1.6
+            circle.Thickness = 1
             circle.Filled = false
             circle.Color = Color3.fromRGB(255, 121, 198)
             circle.Visible = false
@@ -484,22 +471,23 @@ do
         return true
     end
 
-    local function select_target()
-        -- the camera instance is replaced on respawn and on spectate, so a
-        -- reference captured at load goes stale and every projection fails
-        Camera = Workspace.CurrentCamera
-        if not Camera then
+    -- Same metric as the working camlock: viewport centre, not cursor, and
+    -- WorldToViewportPoint rather than WorldToScreenPoint so the gui inset
+    -- does not shift the ring off the crosshair.
+    local function nearest()
+        local camera = Workspace.CurrentCamera
+        if not camera then
             return nil, nil
         end
 
-        local radius = fget("aim_fov", 300)
-        local centre = Vector2.new(Mouse.X, Mouse.Y)
+        local radius = fget("aim_fov", 120)
+        local centre = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
         local my_root = Client.Character and Client.Character:FindFirstChild("HumanoidRootPart")
         local max_distance = fget("target_distance", 500)
         local mode = first(fget("aim_hit_part", { "Head" }), "Head")
-        local prediction = fget("aim_prediction", 0.15)
-        local wall = fget("aim_wall_check", true)
-        local origin = Camera.CFrame.Position
+        local prediction = fget("aim_prediction", 0)
+        local wall = fget("aim_wall_check", false)
+        local origin = camera.CFrame.Position
 
         local best, best_part, best_distance = nil, nil, math.huge
 
@@ -515,8 +503,8 @@ do
                     local clear = not wall or not blocked(origin, goal, character)
 
                     if in_range and clear then
-                        local point, on_screen = Camera:WorldToScreenPoint(goal)
-                        if on_screen then
+                        local point, visible = camera:WorldToViewportPoint(goal)
+                        if visible then
                             local distance = (Vector2.new(point.X, point.Y) - centre).Magnitude
                             if distance <= radius and distance < best_distance then
                                 best, best_part, best_distance = player, part, distance
@@ -530,35 +518,74 @@ do
         return best, best_part
     end
 
+    -- Toggle mode reads the key as an edge, hold mode reads it as a level.
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then
+            return
+        end
+        if not fget("aim_enabled", true) then
+            return
+        end
+        if first(fget("aim_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
+            return
+        end
+        if input.KeyCode ~= key_of(fget("aim_key", Enum.KeyCode.Q)) then
+            return
+        end
+
+        if Aim.locked then
+            Aim.locked = nil
+            return
+        end
+
+        local player = nearest()
+        if player then
+            Aim.locked = player
+        end
+    end)
+
     function Aim.step(dt)
-        Camera = Workspace.CurrentCamera
-        if not Camera then
+        local camera = Workspace.CurrentCamera
+        if not camera then
             return
         end
 
         if circle then
-            circle.Position = Vector2.new(Mouse.X, Mouse.Y)
-            circle.Radius = fget("aim_fov", 300)
-            circle.Visible = fget("aim_enabled", false) and fget("aim_fov_visualise", false)
+            circle.Position = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+            circle.Radius = fget("aim_fov", 120)
+            circle.Visible = fget("aim_enabled", true) and fget("aim_fov_visualise", true)
         end
 
-        local aiming = fget("aim_enabled", false)
-        if (not aiming and not fget("trigger_enabled", false)) or not Camera then
-            restore_camera()
-            Aim.player, Aim.part = nil, nil
+        if not fget("aim_enabled", true) then
+            Aim.player, Aim.part, Aim.locked = nil, nil, nil
             return
         end
 
-        local player, part = select_target()
-        Aim.player, Aim.part = player, part
+        local activation = first(fget("aim_activation", { "Toggle" }), "Toggle")
+        local target_player = nil
 
-        if not aiming or not part then
-            restore_camera()
-            return
+        if activation == "Hold" then
+            if key_down(fget("aim_key", Enum.KeyCode.Q)) then
+                target_player = nearest()
+            end
+        elseif Aim.locked then
+            local character = Aim.locked.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if character and humanoid and humanoid.Health > 0 then
+                target_player = Aim.locked
+            else
+                Aim.locked = nil
+            end
         end
 
-        if not key_down(fget("aim_key", Enum.KeyCode.F)) then
-            restore_camera()
+        local part = nil
+        if target_player and target_player.Character then
+            part = part_for(target_player.Character, first(fget("aim_hit_part", { "Head" }), "Head"))
+        end
+
+        Aim.player, Aim.part = target_player, part
+
+        if not part then
             return
         end
 
@@ -566,67 +593,22 @@ do
             return
         end
 
-        local goal = part.Position + velocity_of(part) * fget("aim_prediction", 0.15)
-        local smooth = math.clamp(fget("aim_smooth", 25) / 100, 0.02, 1)
-        local mode = first(fget("aim_mode", { "Mouse" }), "Mouse")
-        local can_move_mouse = type(mousemoverel) == "function"
+        local lock_position = part.Position
+            + velocity_of(part) * fget("aim_prediction", 0)
+            + Vector3.new(0, fget("aim_y_offset", -0.6), 0)
 
-        if mode == "Mouse" and can_move_mouse then
-            restore_camera()
-            local point, on_screen = Camera:WorldToScreenPoint(goal)
-            if not on_screen then
-                return
-            end
-            mousemoverel((point.X - Mouse.X) * smooth, (point.Y - Mouse.Y) * smooth)
+        local smooth = math.clamp(fget("aim_smooth", 100) / 100, 0.01, 1)
+        local goal = CFrame.new(camera.CFrame.Position, lock_position)
+
+        if smooth >= 1 then
+            camera.CFrame = goal
         else
-            if Camera.CameraType ~= Enum.CameraType.Scriptable then
-                saved_camera_type = Camera.CameraType
-                Camera.CameraType = Enum.CameraType.Scriptable
-            end
             local alpha = 1 - (1 - smooth) ^ (dt * 60)
-            Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(Camera.CFrame.Position, goal), alpha)
+            camera.CFrame = camera.CFrame:Lerp(goal, alpha)
         end
     end
 
     getgenv().TeaAim = Aim
-end
-
--- -------------------------------------------------------------- triggerbot ---
-local Trigger = { next_fire = 0 }
-
-function Trigger.step()
-    if not fget("trigger_enabled", false) then
-        return
-    end
-
-    if not key_down(fget("trigger_key", Enum.KeyCode.F)) then
-        return
-    end
-
-    if not Aim.part then
-        return
-    end
-
-    local point, on_screen = Workspace.CurrentCamera:WorldToScreenPoint(Aim.part.Position)
-    if not on_screen then
-        return
-    end
-
-    local Mouse = Client:GetMouse()
-    local offset = (Vector2.new(point.X, point.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
-    if offset > fget("trigger_range", 35) then
-        return
-    end
-
-    local now = os.clock()
-    if now < Trigger.next_fire then
-        return
-    end
-    Trigger.next_fire = now + 1 / math.max(fget("trigger_rate", 20), 1)
-
-    if type(mouse1click) == "function" then
-        mouse1click()
-    end
 end
 
 -- -------------------------------------------------------------- rapid fire ---
@@ -836,23 +818,21 @@ do
 end
 
 -- --------------------------------------------------------------------- loop ---
-RunService:BindToRenderStep("tea_runtime", Enum.RenderPriority.Camera.Value + 1, function(dt)
+-- RenderStepped, not BindToRenderStep: the default camera module runs inside
+-- the camera-priority step, so a CFrame written there is overwritten before
+-- the frame draws. RenderStepped fires after every render step, so the write
+-- survives to the render - which is why the plain camlock loop works.
+getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
-end)
-
-RunService.Heartbeat:Connect(function()
-    Trigger.step()
 end)
 
 -- ------------------------------------------------------------------ unload ---
 getgenv().TeaUnload = function()
     pcall(function()
-        RunService:UnbindFromRenderStep("tea_runtime")
-    end)
-    pcall(function()
-        if getgenv().TeaRestoreCamera then
-            getgenv().TeaRestoreCamera()
+        if getgenv().TeaRuntimeConnection then
+            getgenv().TeaRuntimeConnection:Disconnect()
+            getgenv().TeaRuntimeConnection = nil
         end
     end)
     pcall(getgenv().TeaHitboxRestore)
