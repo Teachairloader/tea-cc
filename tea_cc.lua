@@ -153,7 +153,16 @@ local function fill(section, row)
         properties.info = {}
     end
 
-    section:create_element({ name = row.n }, properties, true)
+    local element = section:create_element({ name = row.n }, properties, true)
+
+    -- juju draws the keybind chip from its own element state, not from the flag
+    -- table, so a fresh keybind renders "none" until something calls set_key.
+    -- Seeding the flag alone was not enough; the element has to be told.
+    if row.k == "keybind" and element and element["set_key"] and not flags[row.f] then
+        element:set_key(row.d)
+    end
+
+    return element
 end
 
 -- builds one section and returns the cursor for the next one in that column
@@ -178,12 +187,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
--- Seed the binding before the widget is constructed. juju's keybind element
--- renders whatever the flag already holds, so a nil flag draws as "none" and
--- the widget's own `default` never reaches the display.
-flags["aim_key"] = flags["aim_key"] or Enum.KeyCode.Q
-
-local VERSION = "2026-10-24d"
+local VERSION = "2026-10-24e"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
