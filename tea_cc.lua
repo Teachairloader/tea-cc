@@ -187,7 +187,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-24f"
+local VERSION = "2026-10-24g"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -275,6 +275,7 @@ y = block(main, "misc", 1, y, "fake macro", {
     { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
     { k = "keybind", n = "bind", f = "macro_key", d = Enum.KeyCode.E },
     { k = "slider", n = "speed", f = "macro_speed", min = 1, max = 100, d = 20 },
+    { k = "slider", n = "hold", f = "macro_hold", min = 1, max = 200, d = 20, suffix = "ms" },
 })
 
 y = 0
@@ -1039,23 +1040,40 @@ do
 end
 
 -- ---------------------------------------------------------------- fake macro ---
--- Fires the bound key at the configured rate. keypress/keyrelease when the
--- executor exposes them, VirtualInputManager otherwise - the same synthetic
--- input path every macro uses, no game hook.
-local Macro = { active = false }
+-- Fires the bound key at the configured rate. The press and the release are
+-- separated by a real hold window: sending both in the same frame means the
+-- game polls the key as never held, which is why the first cut did nothing.
+local Macro = { active = false, pressed = nil }
 
 do
     local vim = game:GetService("VirtualInputManager")
 
-    function Macro.press(key)
-        if type(keypress) == "function" and type(keyrelease) == "function" then
-            keypress(key)
-            keyrelease(key)
-            return
+    local function press(key)
+        if type(keypress) == "function" then
+            pcall(keypress, key)
+        else
+            vim:SendKeyEvent(true, key, false, game)
         end
+    end
 
-        vim:SendKeyEvent(true, key, false, game)
-        vim:SendKeyEvent(false, key, false, game)
+    local function release(key)
+        if type(keyrelease) == "function" then
+            pcall(keyrelease, key)
+        else
+            vim:SendKeyEvent(false, key, false, game)
+        end
+    end
+
+    function Macro.press(key)
+        Macro.pressed = key
+        press(key)
+    end
+
+    function Macro.release()
+        if Macro.pressed then
+            release(Macro.pressed)
+            Macro.pressed = nil
+        end
     end
 
     function Macro.step()
@@ -1066,14 +1084,25 @@ do
             task.spawn(function()
                 while Macro.active do
                     local key = key_of(fget("macro_key", Enum.KeyCode.E))
-                    if key then
-                        pcall(Macro.press, key)
+                    if not key then
+                        task.wait(0.1)
+                    else
+                        local interval = 1 / math.max(fget("macro_speed", 20), 1)
+                        local hold = math.min(
+                            fget("macro_hold", 20) / 1000,
+                            math.max(interval * 0.5, 0.001)
+                        )
+
+                        Macro.press(key)
+                        task.wait(hold)
+                        Macro.release()
+                        task.wait(math.max(interval - hold, 0.001))
                     end
-                    task.wait(1 / math.max(fget("macro_speed", 20), 1))
                 end
             end)
         elseif not wanted and Macro.active then
             Macro.active = false
+            Macro.release()
         end
     end
 end
@@ -1101,6 +1130,7 @@ getgenv().TeaUnload = function()
     pcall(getgenv().TeaHitboxRestore)
     getgenv().is_firing = false
     Macro.active = false
+    Macro.release()
 end
 
 -- ----------------------------------------------------------------- finish ---
