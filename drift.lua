@@ -176,6 +176,19 @@ if type(source) == "string" then
     source = lit_(source, "405", "507")
     source = lit_(source, "udim2_new(0, 35, 0, 35)", "udim2_new(0, 40, 0, 40)")
 
+    -- header text: the stock offsets (x +5, y +3 / +19) sit on the top edge of
+    -- a 35px mark; the 40px mark needs the label optically centred instead.
+    source = lit_(
+        source,
+        '["Position"] = udim2_new(1, 5, 0, 3)',
+        '["Position"] = udim2_new(1, 8, 0, 12)'
+    )
+    source = lit_(
+        source,
+        '["Position"] = udim2_new(1, 5, 0, 19)',
+        '["Position"] = udim2_new(1, 8, 0, 27)'
+    )
+
     pcall(function()
         if isfile(getgenv().custom_folder .. "/assets/logo.png") then
             source = lit_(
