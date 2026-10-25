@@ -38,7 +38,7 @@
 ]]
 
 local BASE_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/4ce645e7fab457ccc52e20c1ca096f7be05eb1fc/tea_cc.lua"
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/964adcaff46675b1b8becf3dfed2d6fa03faff29/tea_cc.lua"
 local FOLDER = "drift"
 local LOGO_PATH = FOLDER .. "/assets/logo.png"
 
