@@ -68,11 +68,6 @@ local function build_esp()
         return
     end
 
-    local guiInset = Vector2.new(0, 0)
-    pcall(function()
-        guiInset = game:GetService("GuiService"):GetGuiInset()
-    end)
-
     local R15_BONES = {
         { "Head", "UpperTorso" },
         { "UpperTorso", "LowerTorso" },
@@ -118,6 +113,32 @@ local function build_esp()
         end
     end
 
+    -- an earlier copy of this script keeps its own render loop alive unless it
+    -- is disconnected; two loops on two box sizes is exactly how a rail ends up
+    -- floating off the box. kill the old loop, then sweep any overlay it left.
+    local LOOP_KEY = "__drift_esp_loop"
+    local staleLoop = getgenv()[LOOP_KEY]
+    if type(staleLoop) == "function" then
+        pcall(staleLoop)
+        getgenv()[LOOP_KEY] = nil
+    end
+
+    local okScan, guiChildren = pcall(function()
+        return guiParent:GetChildren()
+    end)
+    if okScan and type(guiChildren) == "table" then
+        for _, object in ipairs(guiChildren) do
+            local name = object.Name
+            if typeof(object) == "Instance"
+                and object:IsA("ScreenGui")
+                and string.sub(name, 1, 10) == "drift_esp_" then
+                pcall(function()
+                    object:Destroy()
+                end)
+            end
+        end
+    end
+
     local pool = {}
     local guiPool = {}
     getgenv()[DRAW_KEY] = pool
@@ -151,21 +172,6 @@ local function build_esp()
             textLabel.Size = UDim2.new(0, 220, 0, size + 4)
             textLabel.Visible = false
             return textLabel
-        end)
-        if not ok or object == nil then
-            return nil
-        end
-        return object
-    end
-
-    local function frame()
-        local ok, object = pcall(function()
-            local guiFrame = Instance.new("Frame")
-            guiFrame.BackgroundColor3 = BLACK
-            guiFrame.BorderSizePixel = 0
-            guiFrame.BackgroundTransparency = 0.2
-            guiFrame.Visible = false
-            return guiFrame
         end)
         if not ok or object == nil then
             return nil
@@ -207,6 +213,43 @@ local function build_esp()
             end)
         end
 
+        -- bars live in the Drawing layer, same coordinate space as the box.
+        -- a gui Frame drifts from the Drawing box whenever the topbar inset,
+        -- a stale gui parent or a second running copy of this script comes into
+        -- play; sharing one pixel space removes that whole class of bug.
+        entry.healthOutline = new("Square")
+        entry.healthFill = new("Square")
+        entry.armorOutline = new("Square")
+        entry.armorFill = new("Square")
+
+        for _, key in ipairs({ "healthOutline", "armorOutline" }) do
+            local object = entry[key]
+            if object then
+                pcall(function()
+                    object.Filled = true
+                    object.Thickness = 1
+                    object.Color = BLACK
+                    object.Transparency = 0.45
+                end)
+            end
+        end
+
+        if entry.healthFill then
+            pcall(function()
+                entry.healthFill.Filled = true
+                entry.healthFill.Color = Color3.fromRGB(0, 255, 0)
+                entry.healthFill.Transparency = 0
+            end)
+        end
+
+        if entry.armorFill then
+            pcall(function()
+                entry.armorFill.Filled = true
+                entry.armorFill.Color = Color3.fromRGB(120, 180, 255)
+                entry.armorFill.Transparency = 0
+            end)
+        end
+
         local okGui, gui = pcall(function()
             local screen = Instance.new("ScreenGui")
             screen.Name = "drift_esp_" .. player.Name
@@ -231,28 +274,6 @@ local function build_esp()
                 if object then
                     object.Parent = gui
                 end
-            end
-
-            entry.healthOutline = frame()
-            entry.healthFill = frame()
-            entry.armorOutline = frame()
-            entry.armorFill = frame()
-
-            if entry.healthOutline then
-                entry.healthOutline.Parent = gui
-            end
-            if entry.healthFill then
-                entry.healthFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-                entry.healthFill.BackgroundTransparency = 0
-                entry.healthFill.Parent = entry.healthOutline or gui
-            end
-            if entry.armorOutline then
-                entry.armorOutline.Parent = gui
-            end
-            if entry.armorFill then
-                entry.armorFill.BackgroundColor3 = Color3.fromRGB(120, 180, 255)
-                entry.armorFill.BackgroundTransparency = 0
-                entry.armorFill.Parent = entry.armorOutline or gui
             end
         end
 
@@ -300,6 +321,15 @@ local function build_esp()
             pcall(function()
                 entry.outline:Remove()
             end)
+        end
+        for _, key in ipairs({ "healthOutline", "healthFill", "armorOutline", "armorFill" }) do
+            local object = entry[key]
+            if object then
+                pcall(function()
+                    object:Remove()
+                end)
+                entry[key] = nil
+            end
         end
         for _, line in ipairs(entry.bones) do
             if line then
@@ -349,6 +379,46 @@ local function build_esp()
             green = ratio * 2
         end
         return Color3.new(red, green, 0)
+    end
+
+    -- one renderer for both rails. every edge comes off the box rect that is
+    -- handed to the Drawing square, so the bar cannot land above or below it.
+    local BAR_WIDTH = 3
+    local BAR_GAP = 3
+
+    local function draw_bar(slot, background, fill, boxX, boxY, boxHeight, ratio, color)
+        if not background or not fill then
+            return
+        end
+
+        -- background covers the box stroke exactly: boxY-1 .. boxY+boxHeight+1
+        local bgX = boxX - BAR_GAP - BAR_WIDTH - 1 - slot * (BAR_WIDTH + BAR_GAP)
+        local bgY = boxY - 1
+        local bgHeight = boxHeight + 2
+
+        local inner = boxHeight
+        local fillHeight = math.floor(ratio * inner + 0.5)
+        if fillHeight > inner then
+            fillHeight = inner
+        elseif fillHeight < 0 then
+            fillHeight = 0
+        end
+
+        background.Position = Vector2.new(bgX, bgY)
+        background.Size = Vector2.new(BAR_WIDTH + 2, bgHeight)
+        background.Visible = true
+
+        if fillHeight < 1 then
+            fill.Visible = false
+            return
+        end
+
+        fill.Position = Vector2.new(bgX + 1, bgY + 1 + (inner - fillHeight))
+        fill.Size = Vector2.new(BAR_WIDTH, fillHeight)
+        if color then
+            fill.Color = color
+        end
+        fill.Visible = true
     end
 
     local function set_highlight(entry, character, enabled)
@@ -561,7 +631,9 @@ local function build_esp()
                     end
 
                     local centerX = boxX + boxWidth * 0.5
-                    local guiY = boxY - guiInset.Y
+                    -- the gui ignores the topbar inset, so gui y and Drawing y
+                    -- are the same coordinate space; no offset applies
+                    local guiY = boxY
 
                     if drawName and entry.name then
                         entry.name.TextSize = textSize
@@ -604,17 +676,8 @@ local function build_esp()
                         end
                         entry.lastHealth = ratio
 
-                        local barWidth = 3
-                        local barX = boxX - (barWidth + 4)
-
-                        entry.healthOutline.Position = UDim2.new(0, barX - 1, 0, guiY - 1)
-                        entry.healthOutline.Size = UDim2.new(0, barWidth + 2, 0, boxHeight + 2)
-                        entry.healthOutline.Visible = true
-
-                        entry.healthFill.Position = UDim2.new(0, 1, 0, (1 - ratio) * boxHeight + 1)
-                        entry.healthFill.Size = UDim2.new(0, barWidth, 0, ratio * boxHeight)
-                        entry.healthFill.BackgroundColor3 = health_color(ratio)
-                        entry.healthFill.Visible = true
+                        draw_bar(0, entry.healthOutline, entry.healthFill,
+                            boxX, boxY, boxHeight, ratio, health_color(ratio))
                     else
                         if entry.healthOutline then
                             entry.healthOutline.Visible = false
@@ -633,16 +696,8 @@ local function build_esp()
                         end
                         entry.lastArmor = ratio
 
-                        local barWidth = 3
-                        local barX = boxX - (barWidth * 2 + 8)
-
-                        entry.armorOutline.Position = UDim2.new(0, barX - 1, 0, guiY - 1)
-                        entry.armorOutline.Size = UDim2.new(0, barWidth + 2, 0, boxHeight + 2)
-                        entry.armorOutline.Visible = true
-
-                        entry.armorFill.Position = UDim2.new(0, 1, 0, (1 - ratio) * boxHeight + 1)
-                        entry.armorFill.Size = UDim2.new(0, barWidth, 0, ratio * boxHeight)
-                        entry.armorFill.Visible = true
+                        draw_bar(1, entry.armorOutline, entry.armorFill,
+                            boxX, boxY, boxHeight, ratio, nil)
                     else
                         if entry.armorOutline then
                             entry.armorOutline.Visible = false
@@ -695,20 +750,22 @@ local function build_esp()
 
     -- PostSimulation matches the reference esp and keeps the overlay in step
     -- with the physics tick rather than the render tick
-    if RunService.PostSimulation then
-        RunService.PostSimulation:Connect(function()
-            local ok, err = pcall(render)
-            if not ok then
-                warn("[drift esp] frame error: " .. tostring(err))
-            end
+    local function step()
+        local ok, err = pcall(render)
+        if not ok then
+            warn("[drift esp] frame error: " .. tostring(err))
+        end
+    end
+
+    local connection = (RunService.PostSimulation or RunService.RenderStepped):Connect(step)
+    getgenv()[LOOP_KEY] = function()
+        pcall(function()
+            connection:Disconnect()
         end)
-    else
-        RunService.RenderStepped:Connect(function()
-            local ok, err = pcall(render)
-            if not ok then
-                warn("[drift esp] frame error: " .. tostring(err))
-            end
-        end)
+        for _, entry in pairs(cache) do
+            destroy(entry)
+        end
+        cache = {}
     end
 end
 
