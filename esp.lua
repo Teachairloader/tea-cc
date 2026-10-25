@@ -1,4 +1,4 @@
-﻿-- ==============================================================================
+-- ==============================================================================
 -- drift esp body - generated from ESP.txt
 -- Wrapped in a function + pcall so a missing Drawing / getcustomasset / crypt,
 -- or a protected CoreGui, can never take the rest of tea.cc down with it.
