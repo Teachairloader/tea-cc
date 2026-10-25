@@ -522,29 +522,29 @@ end)
             return
         end
 
-        config.Box.Enable = fget("esp_box", true)
-        config.Box.Font = first(fget("esp_font", { "SmallestPixel" }), "SmallestPixel")
-        config.Box.Filled.Enable = fget("esp_filled", false)
-        config.Box.Filled.Gradient.Enable = fget("esp_gradient", true)
+        config.Box.Enable = fget("esp_ov_box", true)
+        config.Box.Font = first(fget("esp_ov_font", { "SmallestPixel" }), "SmallestPixel")
+        config.Box.Filled.Enable = fget("esp_ov_filled", false)
+        config.Box.Filled.Gradient.Enable = fget("esp_ov_gradient", true)
 
-        config.Text.Enable = fget("esp_name", true)
-            or fget("esp_distance", true)
-            or fget("esp_tool", false)
-        config.Text.Name.Enable = fget("esp_name", true)
-        config.Text.Studs.Enable = fget("esp_distance", true)
-        config.Text.Tool.Enable = fget("esp_tool", false)
+        config.Text.Enable = fget("esp_ov_name", true)
+            or fget("esp_ov_distance", true)
+            or fget("esp_ov_tool", false)
+        config.Text.Name.Enable = fget("esp_ov_name", true)
+        config.Text.Studs.Enable = fget("esp_ov_distance", true)
+        config.Text.Tool.Enable = fget("esp_ov_tool", false)
 
-        config.Bars.Health.Enable = fget("esp_health", true)
-        config.Bars.Armor.Enable = fget("esp_armor", false)
+        config.Bars.Health.Enable = fget("esp_ov_health", true)
+        config.Bars.Armor.Enable = fget("esp_ov_armor", false)
     end
 
     connections.main = connections.main or {}
     connections.main.RenderStepped = game:GetService("RunService").PostSimulation:Connect(function()
         sync_config()
 
-        local enabled = fget("esp_enabled", false)
-        local limit = fget("esp_max_distance", 1000)
-        local teamCheck = fget("esp_team_check", true)
+        local enabled = fget("esp_ov_enabled", false)
+        local limit = fget("esp_ov_max_distance", 1000)
+        local teamCheck = fget("esp_ov_team", true)
         local localCharacter = Client.Character
         local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
 
