@@ -17,7 +17,7 @@
       - skin changer: material/colour/transparency rows replaced by a skin
         dropdown (Inferno, Galaxy, Matrix, RedDeath, GoldGlory) driving the
         weapon texture sets in the skin runtime below
-      - adds an "anti lock" section on misc column 2, under crosshair: toggle
+      - adds an "anti lock" section on visuals column 2, under crosshair: toggle
         enabled runs a one-frame root desync followed by a ping-length
         NetworkIsSleeping choke (velocity restored every pass); toggle resolver
         holds every other player's root at zero vertical velocity
@@ -28,7 +28,7 @@
         live by the body embedded below. Drawing primitives only: no fonts, no
         getcustomasset, no crypt, no remote fetch. Max distance defaults to
         2000, the top of its range.
-      - adds "super jump" and "fly" to the bottom of misc column 1, each with a
+      - adds "super jump" and "fly" to the bottom of misc column 2, each with a
         toggle, its own keybind and one tuning slider. The bind flips the flag
         through the widget, so the checkmark and a saved config follow along.
         Super jump reasserts JumpPower per frame; fly drives a BodyVelocity and
@@ -44,7 +44,7 @@
 ]]
 
 local BASE_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/631cce01e830568560198a1c48eb406889de3bd5/tea_cc.lua"
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/64a68a677b025b810f2d3b3a693c7b27966f854f/tea_cc.lua"
 local FOLDER = "drift"
 local LOGO_PATH = FOLDER .. "/assets/logo.png"
 
