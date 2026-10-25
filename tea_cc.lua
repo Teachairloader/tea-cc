@@ -17,8 +17,12 @@
     menu's own pink FOV ring (replaces silent aim), rapid fire (driven by the
     user's own utility source, now flag-driven), hitbox expander (reasserted
     every frame so the game's own replication cannot shrink it back), and a
-    standalone rage orbit with its own bind. Weapon and triggerbot sections
-    removed. Camlock ships on right mouse; the aim key stays as a second input.
+    standalone rage orbit with its own bind, and a composable world layer:
+    palette, lighting numbers and weather are three independent axes, so snow
+    over a red sky is a supported state rather than a preset. Weather is three
+    layered emitters (far/mid/near) that follow the camera. Weapon and
+    triggerbot sections removed. Camlock ships on right mouse; the aim key
+    stays as a second input.
 ]]
 
 local UI_URL = "https://raw.githubusercontent.com/panduh16/juju/main/ui.lua"
@@ -188,7 +192,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-25a"
+local VERSION = "2026-10-25c"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
