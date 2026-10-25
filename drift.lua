@@ -214,12 +214,17 @@ source = lit(
 -- megabyte, so it lives as a second file and gets folded into the same chunk.
 -- An empty string here leaves the menu inert instead of failing the load.
 local ESP_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/89464276aa2792d3ccce9ab819c9614b35805965/esp.lua"
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/6bdf6c22116ad507ea7d7705b6f695a1e25b550a/esp.lua"
 local espChunk = ""
 
 pcall(function()
     local body = game:HttpGet(ESP_URL)
     if type(body) == "string" and #body > 1000 then
+        -- editors on windows love to prefix this file with a BOM; Luau treats
+        -- U+FEFF as an identifier and the whole chunk dies at compile
+        if body:sub(1, 3) == "\239\187\191" then
+            body = body:sub(4)
+        end
         espChunk = body
     end
 end)
