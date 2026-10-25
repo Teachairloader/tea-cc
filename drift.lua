@@ -174,22 +174,22 @@ y = block(main, "combat", 1, y, "silent aim", {
 ]==]
 
 -- ----------------------------------------------------------------- esp (menu) ---
--- Own block(): the esp section is long enough that sharing silent aim's block
--- would push every silent control off the column.
-local ESP_MENU = [==[
-y = block(main, "combat", 1, y, "esp", {
-    { k = "toggle", n = "enabled", f = "esp_enabled", d = false },
-    { k = "toggle", n = "box", f = "esp_box", d = true },
-    { k = "toggle", n = "filled box", f = "esp_filled", d = false },
-    { k = "toggle", n = "gradient", f = "esp_gradient", d = true },
-    { k = "toggle", n = "name", f = "esp_name", d = true },
-    { k = "toggle", n = "distance", f = "esp_distance", d = true },
-    { k = "toggle", n = "tool", f = "esp_tool", d = false },
-    { k = "toggle", n = "health bar", f = "esp_health", d = true },
-    { k = "toggle", n = "armor bar", f = "esp_armor", d = false },
-    { k = "dropdown", n = "font", f = "esp_font", o = { "SmallestPixel", "ProggyClean", "ProggyTiny", "Visitor", "Tahoma", "TahomaBold", "Verdana", "Stratum2", "WindowsXP" }, d = { "SmallestPixel" } },
-    { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 1000 },
-    { k = "toggle", n = "team check", f = "esp_team_check", d = true },
+-- Lives on visuals column 2, stacked under "world". Combat column 1 already
+-- carries aimbot + silent aim; a third section there overruns the content area.
+-- Flags are esp_ov_* so tea.cc's own "player esp" block keeps its names.
+local ESP_MENU = [==[y = block(main, "visuals", 2, y, "overlay esp", {
+    { k = "toggle", n = "enabled", f = "esp_ov_enabled", d = false },
+    { k = "toggle", n = "box", f = "esp_ov_box", d = true },
+    { k = "toggle", n = "filled box", f = "esp_ov_filled", d = false },
+    { k = "toggle", n = "gradient", f = "esp_ov_gradient", d = true },
+    { k = "toggle", n = "name", f = "esp_ov_name", d = true },
+    { k = "toggle", n = "distance", f = "esp_ov_distance", d = true },
+    { k = "toggle", n = "tool", f = "esp_ov_tool", d = false },
+    { k = "toggle", n = "health bar", f = "esp_ov_health", d = true },
+    { k = "toggle", n = "armor bar", f = "esp_ov_armor", d = false },
+    { k = "dropdown", n = "font", f = "esp_ov_font", o = { "SmallestPixel", "ProggyClean", "ProggyTiny", "Visitor", "Tahoma", "TahomaBold", "Verdana", "Stratum2", "WindowsXP" }, d = { "SmallestPixel" } },
+    { k = "slider", n = "max distance", f = "esp_ov_max_distance", min = 50, max = 2000, d = 500 },
+    { k = "toggle", n = "team check", f = "esp_ov_team", d = true },
 })
 
 ]==]
@@ -197,7 +197,13 @@ y = block(main, "combat", 1, y, "esp", {
 source = lit(
     source,
     'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {',
-    SILENT_MENU .. ESP_MENU .. 'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {'
+    SILENT_MENU .. 'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {'
+)
+
+source = lit(
+    source,
+    '-- misc -----------------------------------------------------------------',
+    ESP_MENU .. '-- misc -----------------------------------------------------------------'
 )
 
 -- ---------------------------------------------------------------- esp (body) ---
@@ -205,7 +211,7 @@ source = lit(
 -- megabyte, so it lives as a second file and gets folded into the same chunk.
 -- An empty string here leaves the menu inert instead of failing the load.
 local ESP_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/5eeda95cd04100696e6e5b820d347a4369db559c/esp.lua"
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/89464276aa2792d3ccce9ab819c9614b35805965/esp.lua"
 local espChunk = ""
 
 pcall(function()
@@ -225,9 +231,12 @@ end
 -- Players, Workspace, UserInputService.
 local SILENT_RUNTIME = [==[
 -- ================================================================ silent aim ===
--- Replaces GunHandler.getAim so the server receives an aim vector that never
--- had to pass through the camera. The original is kept verbatim and called
--- whenever the feature is off or has no target, so offline behaviour is stock.
+-- Two halves, independent:
+--   1. namecall hook - rewrites direction-like FireServer/InvokeServer args so
+--      the shot curves to the target while the camera never moves.
+--   2. overlay - dot + tracer from the same target pick.
+-- The old GunHandler.getAim probe is gone: that module does not exist in this
+-- game, so the whole block used to sit inert behind a failed require.
 do
     local RenderStepped = game:GetService("RunService").RenderStepped
 
@@ -250,243 +259,291 @@ do
         probe:Remove()
     end)
 
-    if not hasDrawing then
-        warn("[drift] executor has no Drawing API - tracers and dots stay off")
-    end
+    local mouse = Client:GetMouse()
+    local toggled = false
+    local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
 
-    local okModule, handler = pcall(function()
-        local modules = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 15)
-        return require(modules:WaitForChild("GunHandler", 15))
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed or not fget("silent_enabled", false) then
+            return
+        end
+        if first(fget("silent_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
+            return
+        end
+        if input.KeyCode == key_of(fget("silent_key", Enum.KeyCode.E)) then
+            toggled = not toggled
+        end
     end)
 
-    if not okModule or type(handler) ~= "table" or type(handler.getAim) ~= "function" then
-        warn("[drift] GunHandler.getAim not found - silent aim stays inert")
-    else
-        -- A reload must not chain hooks: remember the untouched function per
-        -- handler instance and always wrap that one.
-        if getgenv().__drift_silent_handler ~= handler then
-            getgenv().__drift_silent_original = handler.getAim
-            getgenv().__drift_silent_handler = handler
+    local function active()
+        if not fget("silent_enabled", false) then
+            return false
         end
-
-        local original = getgenv().__drift_silent_original
-        local mouse = Client:GetMouse()
-        local toggled = true
-        local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
-
-        UserInputService.InputBegan:Connect(function(input, processed)
-            if processed or not fget("silent_enabled", false) then
-                return
-            end
-            if first(fget("silent_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
-                return
-            end
-            if input.KeyCode == key_of(fget("silent_key", Enum.KeyCode.E)) then
-                toggled = not toggled
-            end
-        end)
-
-        local function active()
-            if not fget("silent_enabled", false) then
-                return false
-            end
-            if first(fget("silent_activation", { "Toggle" }), "Toggle") == "Toggle" then
-                return toggled
-            end
-            return key_down(fget("silent_key", Enum.KeyCode.E))
+        if first(fget("silent_activation", { "Toggle" }), "Toggle") == "Toggle" then
+            return toggled
         end
+        return key_down(fget("silent_key", Enum.KeyCode.E))
+    end
 
-        local function pick_part(character)
-            local mode = first(fget("silent_part", { "Head" }), "Head")
+    local function pick_part(character)
+        local mode = first(fget("silent_part", { "Head" }), "Head")
 
-            if mode == "Closest Part" then
-                local origin = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position
-                local best, bestDistance = nil, math.huge
-                for _, name in ipairs(PART_ORDER) do
-                    local part = character:FindFirstChild(name)
-                    if part and part:IsA("BasePart") and origin then
-                        local distance = (part.Position - origin).Magnitude
-                        if distance < bestDistance then
-                            best, bestDistance = part, distance
-                        end
+        if mode == "Closest Part" then
+            local origin = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position
+            local best, bestDistance = nil, math.huge
+            for _, name in ipairs(PART_ORDER) do
+                local part = character:FindFirstChild(name)
+                if part and part:IsA("BasePart") and origin then
+                    local distance = (part.Position - origin).Magnitude
+                    if distance < bestDistance then
+                        best, bestDistance = part, distance
                     end
                 end
-                if best then
-                    return best
-                end
-            else
-                local part = character:FindFirstChild(mode)
-                if part and part:IsA("BasePart") then
-                    return part
-                end
             end
+            if best then
+                return best
+            end
+        else
+            local part = character:FindFirstChild(mode)
+            if part and part:IsA("BasePart") then
+                return part
+            end
+        end
 
-            local head = character:FindFirstChild("Head")
-            if head and head:IsA("BasePart") then
-                return head
-            end
-            local root = character:FindFirstChild("HumanoidRootPart")
-            if root and root:IsA("BasePart") then
-                return root
-            end
+        local head = character:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then
+            return head
+        end
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if root and root:IsA("BasePart") then
+            return root
+        end
+        return nil
+    end
+
+    local function blocked(origin, part)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { Client.Character, part.Parent }
+        params.IgnoreWater = true
+        return Workspace:Raycast(origin, part.Position - origin, params) ~= nil
+    end
+
+    local function closest()
+        local camera = Workspace.CurrentCamera
+        if not camera then
             return nil
         end
 
-        local function blocked(origin, part)
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = { Client.Character, part.Parent }
-            params.IgnoreWater = true
-            return Workspace:Raycast(origin, part.Position - origin, params) ~= nil
-        end
+        local cursor = Vector2.new(mouse.X, mouse.Y)
+        local radius = fget("silent_fov", 250)
+        local wall = fget("silent_wall_check", false)
+        local team = fget("silent_team_check", true)
+        local origin = camera.CFrame.Position
+        local best, bestDistance = nil, math.huge
 
-        local function closest()
-            local camera = Workspace.CurrentCamera
-            if not camera then
-                return nil
-            end
+        for _, player in ipairs(Players:GetPlayers()) do
+            local character = player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-            local cursor = Vector2.new(mouse.X, mouse.Y)
-            local radius = fget("silent_fov", 250)
-            local wall = fget("silent_wall_check", false)
-            local team = fget("silent_team_check", true)
-            local origin = camera.CFrame.Position
-            local best, bestDistance = nil, math.huge
-
-            for _, player in ipairs(Players:GetPlayers()) do
-                local character = player.Character
-                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-                if player ~= Client and humanoid and humanoid.Health > 0 then
-                    local sameTeam = team and Client.Team ~= nil and player.Team == Client.Team
-                    if not sameTeam then
-                        local part = pick_part(character)
-                        if part then
-                            local screen, onScreen = camera:WorldToScreenPoint(part.Position)
-                            if onScreen then
-                                local distance = (Vector2.new(screen.X, screen.Y) - cursor).Magnitude
-                                if distance <= radius
-                                    and distance < bestDistance
-                                    and not (wall and blocked(origin, part))
-                                then
-                                    best, bestDistance = part, distance
-                                end
+            if player ~= Client and humanoid and humanoid.Health > 0 then
+                local sameTeam = team and Client.Team ~= nil and player.Team == Client.Team
+                if not sameTeam then
+                    local part = pick_part(character)
+                    if part then
+                        local screen, onScreen = camera:WorldToViewportPoint(part.Position)
+                        if onScreen then
+                            local distance = (Vector2.new(screen.X, screen.Y) - cursor).Magnitude
+                            if distance <= radius
+                                and distance < bestDistance
+                                and not (wall and blocked(origin, part))
+                            then
+                                best, bestDistance = part, distance
                             end
                         end
                     end
                 end
             end
-
-            return best
         end
 
-        handler.getAim = function(origin, maxDistance)
+        return best
+    end
+
+    -- ------------------------------------------------------------- redirection ---
+    -- Guns call FireServer(direction) with the camera's unit ray. A Vector3 of
+    -- length ~1 that points within ~25 degrees of the look vector is that
+    -- direction argument; positions are studs long, so the magnitude gate keeps
+    -- them out. Everything else is forwarded untouched.
+    local wrap = newcclosure or function(fn)
+        return fn
+    end
+
+    local redirected = false
+
+    if hookmetamethod then
+        pcall(function()
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+                local method = getnamecallmethod()
+
+                if method ~= "FireServer" and method ~= "InvokeServer" then
+                    return oldNamecall(self, ...)
+                end
+
+                if not active() then
+                    return oldNamecall(self, ...)
+                end
+
+                local camera = Workspace.CurrentCamera
+                local target = camera and closest()
+                if not target then
+                    return oldNamecall(self, ...)
+                end
+
+                local delta = target.Position - camera.CFrame.Position
+                if delta.Magnitude < 0.01 then
+                    return oldNamecall(self, ...)
+                end
+
+                local direction = delta.Unit
+                local look = camera.CFrame.LookVector
+                local arguments = table.pack(...)
+                local changed = false
+
+                for index = 1, arguments.n do
+                    local value = arguments[index]
+                    if typeof(value) == "Vector3" then
+                        local magnitude = value.Magnitude
+                        if magnitude > 0.9
+                            and magnitude < 1.1
+                            and value.Unit:Dot(look) > 0.9
+                        then
+                            arguments[index] = direction
+                            changed = true
+                        end
+                    end
+                end
+
+                if not changed then
+                    -- position-style aim args: the world point under the cursor.
+                    -- Only rewritten when it sits almost exactly on the look ray,
+                    -- so movement / physics remotes keep their own vectors.
+                    for index = 1, arguments.n do
+                        local value = arguments[index]
+                        if typeof(value) == "Vector3" and value.Magnitude > 2 then
+                            local toPoint = value - camera.CFrame.Position
+                            if toPoint.Magnitude > 0.5 then
+                                local along = toPoint.Unit:Dot(look)
+                                local miss = (toPoint - look * toPoint:Dot(look)).Magnitude
+                                if along > 0.98 and miss < 4 then
+                                    arguments[index] = target.Position
+                                    changed = true
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if not changed then
+                    return oldNamecall(self, ...)
+                end
+
+                redirected = true
+                return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
+            end))
+        end)
+    else
+        warn("[drift] no hookmetamethod - silent aim cannot redirect shots")
+    end
+
+    -- ------------------------------------------------------------------ overlay ---
+    if not hasDrawing then
+        warn("[drift] executor has no Drawing API - tracer and dot stay off")
+    else
+        local tracer = Drawing.new("Line")
+        tracer.Thickness = 1.5
+        tracer.Color = Color3.fromRGB(255, 255, 255)
+        tracer.Transparency = 0.75
+        tracer.Visible = false
+        tracer.ZIndex = 1
+
+        local dot = Drawing.new("Circle")
+        dot.Thickness = 1
+        dot.Color = Color3.fromRGB(255, 255, 255)
+        dot.Transparency = 1
+        dot.Filled = true
+        dot.NumSides = 24
+        dot.Visible = false
+        dot.ZIndex = 2
+
+        drawings[#drawings + 1] = tracer
+        drawings[#drawings + 1] = dot
+
+        local function hide_overlay()
+            tracer.Visible = false
+            dot.Visible = false
+        end
+
+        local function tracer_origin(camera, viewport)
+            local mode = first(fget("silent_tracer_from", { "Mouse" }), "Mouse")
+
+            if mode == "Bottom" then
+                return Vector2.new(viewport.X / 2, viewport.Y)
+            end
+
+            if mode == "Character" then
+                local character = Client.Character
+                local anchor = character
+                    and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+                if anchor and anchor:IsA("BasePart") then
+                    local point, onScreen = camera:WorldToViewportPoint(anchor.Position)
+                    if onScreen then
+                        return Vector2.new(point.X, point.Y)
+                    end
+                end
+                return Vector2.new(viewport.X / 2, viewport.Y)
+            end
+
+            return Vector2.new(mouse.X, mouse.Y)
+        end
+
+        RenderStepped:Connect(function()
             if not active() then
-                return original(origin, maxDistance)
+                hide_overlay()
+                return
             end
 
             local target = closest()
-            local from = origin or (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position)
-
-            if target and from then
-                local delta = target.Position - from
-                if delta.Magnitude > 0.001 then
-                    return delta.Unit, math.min(delta.Magnitude, maxDistance or 200)
-                end
+            local camera = Workspace.CurrentCamera
+            if not target or not target.Parent or not camera then
+                hide_overlay()
+                return
             end
 
-            return original(origin, maxDistance)
-        end
+            local point, onScreen = camera:WorldToViewportPoint(target.Position)
+            if not onScreen then
+                hide_overlay()
+                return
+            end
 
-        -- ------------------------------------------------------------ overlay ---
-        -- Same closest() the aim path uses, so the dot lands on the part the
-        -- server would be told to hit. The render step only writes properties.
-        if hasDrawing then
-            local tracer = Drawing.new("Line")
-            tracer.Thickness = 1.5
-            tracer.Color = Color3.fromRGB(255, 255, 255)
-            tracer.Transparency = 0.75
-            tracer.Visible = false
-            tracer.ZIndex = 1
+            local screen = Vector2.new(point.X, point.Y)
 
-            local dot = Drawing.new("Circle")
-            dot.Thickness = 1
-            dot.Color = Color3.fromRGB(255, 255, 255)
-            dot.Transparency = 1
-            dot.Filled = true
-            dot.NumSides = 24
-            dot.Visible = false
-            dot.ZIndex = 2
-
-            drawings[#drawings + 1] = tracer
-            drawings[#drawings + 1] = dot
-
-            local function hide_overlay()
+            if fget("silent_tracer", true) then
+                tracer.From = tracer_origin(camera, camera.ViewportSize)
+                tracer.To = screen
+                tracer.Visible = true
+            else
                 tracer.Visible = false
+            end
+
+            if fget("silent_dot", true) then
+                dot.Position = screen
+                dot.Radius = fget("silent_dot_size", 6)
+                dot.Visible = true
+            else
                 dot.Visible = false
             end
-
-            local function tracer_origin(camera, viewport)
-                local mode = first(fget("silent_tracer_from", { "Mouse" }), "Mouse")
-
-                if mode == "Bottom" then
-                    return Vector2.new(viewport.X / 2, viewport.Y)
-                end
-
-                if mode == "Character" then
-                    local character = Client.Character
-                    local anchor = character
-                        and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
-                    if anchor and anchor:IsA("BasePart") then
-                        local point, onScreen = camera:WorldToViewportPoint(anchor.Position)
-                        if onScreen then
-                            return Vector2.new(point.X, point.Y)
-                        end
-                    end
-                    return Vector2.new(viewport.X / 2, viewport.Y)
-                end
-
-                return Vector2.new(mouse.X, mouse.Y)
-            end
-
-            RenderStepped:Connect(function()
-                if not active() then
-                    hide_overlay()
-                    return
-                end
-
-                local target = closest()
-                local camera = Workspace.CurrentCamera
-                if not target or not target.Parent or not camera then
-                    hide_overlay()
-                    return
-                end
-
-                local point, onScreen = camera:WorldToViewportPoint(target.Position)
-                if not onScreen then
-                    hide_overlay()
-                    return
-                end
-
-                local screen = Vector2.new(point.X, point.Y)
-
-                if fget("silent_tracer", true) then
-                    tracer.From = tracer_origin(camera, camera.ViewportSize)
-                    tracer.To = screen
-                    tracer.Visible = true
-                else
-                    tracer.Visible = false
-                end
-
-                if fget("silent_dot", true) then
-                    dot.Position = screen
-                    dot.Radius = fget("silent_dot_size", 6)
-                    dot.Visible = true
-                else
-                    dot.Visible = false
-                end
-            end)
-        end
+        end)
     end
 end
 
