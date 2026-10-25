@@ -233,13 +233,6 @@ source = lit(
 
 source = lit(
     source,
-    '    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },\n',
-    '    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },\n'
-        .. '    { k = "dropdown", n = "mouse bind", f = "aim_mouse", o = { "None", "Right", "Left" }, d = { "None" } },\n'
-)
-
-source = lit(
-    source,
     '    { k = "slider", n = "shots per second", f = "rapid_rate", min = 1, max = 120, d = 20 },',
     '    { k = "slider", n = "shots per second", f = "rapid_rate", min = 60, max = 1000, d = 300 },'
 )
@@ -253,50 +246,10 @@ source = lit(
     [==[    { k = "dropdown", n = "skin", f = "skin_choice", o = { "Inferno", "Galaxy", "Matrix", "RedDeath", "GoldGlory" }, d = { "Inferno" }, req = true },]==]
 )
 
--- camlock input: one trigger for both bind styles, used by the edge handler
--- and by hold mode, so a rebind cannot drift between the two paths.
-source = lit(
-    source,
-    '    -- Toggle mode reads the key as an edge, hold mode reads it as a level.',
-    [==[    local MOUSE_BUTTONS = {
-        Right = Enum.UserInputType.MouseButton2,
-        Left = Enum.UserInputType.MouseButton1,
-    }
-
-    local function aim_button()
-        return MOUSE_BUTTONS[first(fget("aim_mouse", { "None" }), "None")]
-    end
-
-    local function aim_input(input)
-        local button = aim_button()
-        if button then
-            return input.UserInputType == button
-        end
-        return input.KeyCode == key_of(fget("aim_key", Enum.KeyCode.Q))
-    end
-
-    local function aim_held()
-        local button = aim_button()
-        if button then
-            return UserInputService:IsMouseButtonPressed(button)
-        end
-        return key_down(fget("aim_key", Enum.KeyCode.Q))
-    end
-
-    -- Toggle mode reads the key as an edge, hold mode reads it as a level.]==]
-)
-
-source = lit(
-    source,
-    '        if input.KeyCode ~= key_of(fget("aim_key", Enum.KeyCode.Q)) then',
-    '        if not aim_input(input) then'
-)
-
-source = lit(
-    source,
-    '            if key_down(fget("aim_key", Enum.KeyCode.Q)) then',
-    '            if aim_held() then'
-)
+-- camlock input is owned by tea.cc: the base carries a right-mouse toggle
+-- (aim_rmb, default on) plus is_aim_input/aim_held, so drift no longer
+-- rewrites that path. Two writers on the same block was how a rebind used
+-- to drift between the edge handler and hold mode.
 
 -- rapid fire: task.wait floors at one frame, so anything above 60/s fires a
 -- burst per frame instead of asking the scheduler for a sub-frame delay.
