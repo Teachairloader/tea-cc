@@ -1721,8 +1721,10 @@ do
     end
 
     local function flash_tick()
+        -- storm keeps its own rig kind, so the gate has to accept both rain
+        -- states or the storm preset would never actually flash.
         local kind = World.kind
-        if kind ~= "Rain" then
+        if kind ~= "Rain" and kind ~= "Storm" then
             return
         end
         if not fget("world_lightning", false) and first(fget("world_weather", { "None" }), "None") ~= "Storm" then
@@ -1735,7 +1737,9 @@ do
         end
         World.flash_at = now + math.random(4, 10)
 
-        local base = Lighting.Brightness
+        -- restore from the slider, not a snapshot: a brightness change during
+        -- the 100ms strike must not leave the world stuck brighter.
+        local base = fget("world_brightness", 2)
         task.spawn(function()
             write(Lighting, "Brightness", base + 3.5)
             task.wait(0.05)
