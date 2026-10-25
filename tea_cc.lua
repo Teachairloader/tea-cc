@@ -16,8 +16,9 @@
     This revision adds a runtime layer below the layout: camlock aimbot with the
     menu's own pink FOV ring (replaces silent aim), rapid fire (driven by the
     user's own utility source, now flag-driven), hitbox expander (reasserted
-    every frame so the game's own replication cannot shrink it back). Weapon
-    and triggerbot sections removed.
+    every frame so the game's own replication cannot shrink it back), and a
+    standalone rage orbit with its own bind. Weapon and triggerbot sections
+    removed. Camlock ships on right mouse; the aim key stays as a second input.
 ]]
 
 local UI_URL = "https://raw.githubusercontent.com/panduh16/juju/main/ui.lua"
@@ -187,7 +188,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-24k"
+local VERSION = "2026-10-25a"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -200,6 +201,7 @@ y = block(main, "combat", 1, y, "aimbot", {
     { k = "toggle", n = "enabled", f = "aim_enabled", d = true },
     { k = "dropdown", n = "activation", f = "aim_activation", o = { "Toggle", "Hold" }, d = { "Toggle" }, req = true },
     { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },
+    { k = "toggle", n = "right mouse", f = "aim_rmb", d = true },
     { k = "dropdown", n = "hit part", f = "aim_hit_part", o = { "Head", "Torso", "Closest Part", "Nearest Bone" }, d = { "Head" }, req = true },
     { k = "slider", n = "y offset", f = "aim_y_offset", min = -3, max = 3, d = -0.6, dec = 2 },
     { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 120 },
@@ -269,6 +271,13 @@ y = block(main, "misc", 1, y, "legit macro", {
     { k = "toggle", n = "enabled", f = "legit_enabled", d = false },
     { k = "keybind", n = "bind", f = "legit_key", d = Enum.KeyCode.X },
     { k = "slider", n = "delay", f = "legit_delay", min = 0, max = 200, d = 0, suffix = "ms" },
+})
+y = block(main, "misc", 1, y, "orbit", {
+    { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
+    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
+    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
+    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
 })
 
 y = 0
@@ -533,8 +542,18 @@ do
     end
 
     -- Toggle mode reads the key as an edge, hold mode reads it as a level.
+    -- Right mouse is the shipped activation. Roblox reports RMB as processed
+    -- because the same click drives camera rotation, so mouse input never filters
+    -- on that flag; keyboard still does. The aim key stays as a second input.
+    local function is_aim_input(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+            return fget("aim_rmb", true)
+        end
+        return input.KeyCode == key_of(fget("aim_key", Enum.KeyCode.Q))
+    end
+
     UserInputService.InputBegan:Connect(function(input, processed)
-        if processed then
+        if input.UserInputType ~= Enum.UserInputType.MouseButton2 and processed then
             return
         end
         if not fget("aim_enabled", true) then
@@ -543,7 +562,7 @@ do
         if first(fget("aim_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
             return
         end
-        if input.KeyCode ~= key_of(fget("aim_key", Enum.KeyCode.Q)) then
+        if not is_aim_input(input) then
             return
         end
 
@@ -579,7 +598,11 @@ do
         local target_player = nil
 
         if activation == "Hold" then
-            if key_down(fget("aim_key", Enum.KeyCode.Q)) then
+            local held = key_down(fget("aim_key", Enum.KeyCode.Q))
+            if not held and fget("aim_rmb", true) then
+                held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            end
+            if held then
                 target_player = nearest()
             end
         elseif Aim.locked then
@@ -1208,6 +1231,175 @@ do
     end
 end
 
+-- ------------------------------------------------------------------- orbit ---
+-- Standalone rage orbit. Own bind, own flags, no dependency on the camlock -
+-- it borrows Aim.locked when one exists and otherwise picks its own body, so
+-- turning camlock off does not stop the spin. The root is anchored while the
+-- circle runs, which is what stops knock physics from pulling the character
+-- out of the ring.
+local Orbit = { active = false, target = nil, angle = 0, auto_rotate = true }
+
+do
+    local vector_zero = Vector3.zero
+
+    local function root_of(player)
+        local character = player and player.Character
+        return character and character:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function hum_of(player)
+        local character = player and player.Character
+        return character and character:FindFirstChildOfClass("Humanoid")
+    end
+
+    local function alive(player)
+        local humanoid = hum_of(player)
+        return humanoid ~= nil and humanoid.Health > 0 and root_of(player) ~= nil
+    end
+
+    -- viewport-centre sweep, same metric as the camlock, so the orbit grabs the
+    -- body the player is actually looking at rather than the closest in world.
+    local function nearest()
+        local my_root = root_of(Players.LocalPlayer)
+        local camera = Workspace.CurrentCamera
+        if not my_root or not camera then
+            return nil
+        end
+
+        local centre = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+        local max_distance = fget("target_distance", 500)
+        local best, best_screen = nil, math.huge
+
+        for _, player in Players:GetPlayers() do
+            if player ~= Players.LocalPlayer and alive(player) then
+                local root = root_of(player)
+                if (root.Position - my_root.Position).Magnitude <= max_distance then
+                    local point, visible = camera:WorldToViewportPoint(root.Position)
+                    if visible then
+                        local screen = (Vector2.new(point.X, point.Y) - centre).Magnitude
+                        if screen < best_screen then
+                            best, best_screen = player, screen
+                        end
+                    end
+                end
+            end
+        end
+
+        return best
+    end
+
+    local function release()
+        local my_root = root_of(Players.LocalPlayer)
+        local humanoid = hum_of(Players.LocalPlayer)
+        if my_root then
+            my_root.Anchored = false
+            my_root.AssemblyLinearVelocity = vector_zero
+            my_root.AssemblyAngularVelocity = vector_zero
+        end
+        if humanoid then
+            humanoid.AutoRotate = Orbit.auto_rotate
+        end
+        Orbit.active = false
+        Orbit.target = nil
+    end
+
+    local function engage()
+        local my_root = root_of(Players.LocalPlayer)
+        local humanoid = hum_of(Players.LocalPlayer)
+        if not my_root or not humanoid or humanoid.Health <= 0 then
+            return
+        end
+
+        local target = (Aim.locked and alive(Aim.locked)) and Aim.locked or nearest()
+        if not target then
+            return
+        end
+
+        Orbit.auto_rotate = humanoid.AutoRotate
+        humanoid.AutoRotate = false
+        my_root.Anchored = true
+
+        Orbit.target = target
+        Orbit.angle = 0
+        Orbit.active = true
+    end
+
+    function Orbit.release()
+        release()
+    end
+
+    function Orbit.toggle()
+        if Orbit.active then
+            release()
+        else
+            engage()
+        end
+    end
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed then
+            return
+        end
+        if not fget("orbit_enabled", false) then
+            return
+        end
+        if input.KeyCode ~= key_of(fget("orbit_key", Enum.KeyCode.Q)) then
+            return
+        end
+        Orbit.toggle()
+    end)
+
+    function Orbit.step(dt)
+        if not fget("orbit_enabled", false) then
+            if Orbit.active then
+                release()
+            end
+            return
+        end
+
+        if not Orbit.active then
+            return
+        end
+
+        local my_root = root_of(Players.LocalPlayer)
+        local humanoid = hum_of(Players.LocalPlayer)
+        if not my_root or not humanoid or humanoid.Health <= 0 then
+            release()
+            return
+        end
+
+        if not alive(Orbit.target) then
+            local replacement = (Aim.locked and alive(Aim.locked)) and Aim.locked or nearest()
+            if not replacement then
+                release()
+                return
+            end
+            Orbit.target = replacement
+        end
+
+        local height = fget("orbit_height", 6.5)
+        local head = Orbit.target.Character:FindFirstChild("Head")
+        local anchor = head
+            and (head.Position + Vector3.new(0, height, 0))
+            or (root_of(Orbit.target).Position + Vector3.new(0, height + 1.5, 0))
+
+        Orbit.angle = (Orbit.angle + fget("orbit_speed", 32) * dt) % (math.pi * 2)
+
+        local radius = fget("orbit_radius", 2.2)
+        local position = anchor + Vector3.new(
+            math.cos(Orbit.angle) * radius,
+            0,
+            math.sin(Orbit.angle) * radius
+        )
+
+        my_root.CFrame = CFrame.lookAt(position, anchor)
+        my_root.AssemblyLinearVelocity = vector_zero
+        my_root.AssemblyAngularVelocity = vector_zero
+    end
+
+    getgenv().TeaOrbit = Orbit
+end
+
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
 -- the camera-priority step, so a CFrame written there is overwritten before
@@ -1216,6 +1408,7 @@ end
 getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
+    Orbit.step(dt)
     Avatar.step()
     Walkspeed.step()
     Crosshair.step()
@@ -1230,6 +1423,9 @@ getgenv().TeaUnload = function()
         end
     end)
     pcall(getgenv().TeaHitboxRestore)
+    if getgenv().TeaOrbit then
+        pcall(getgenv().TeaOrbit.release)
+    end
     getgenv().is_firing = false
 
     if Walkspeed.humanoid and Walkspeed.humanoid.Parent and Walkspeed.original then
