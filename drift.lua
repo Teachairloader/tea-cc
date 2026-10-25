@@ -1768,10 +1768,163 @@ do
 end
 ]==]
 
+-- ---------------------------------------------------------- configs (body) ---
+-- juju already owns the config store (drift/configs/*.cfg) and its own tab. This
+-- is the executor-side surface over it: export the raw blob to share, import a
+-- pasted blob, or read a config back as plain json. TeaJujuMenu is assigned
+-- after this point, so every entry resolves it at call time.
+local CONFIG_RUNTIME = [==[
+-- ================================================================== configs ===
+do
+    local folder = "drift/configs"
+
+    local function api()
+        return getgenv().TeaJujuMenu
+    end
+
+    local function ensure()
+        pcall(function()
+            if not isfolder("drift") then
+                makefolder("drift")
+            end
+            if not isfolder(folder) then
+                makefolder(folder)
+            end
+        end)
+    end
+
+    -- juju refuses a name with a slash or a dot; the same rule here keeps a
+    -- shared config from writing anywhere but the config folder
+    local function clean(name)
+        if type(name) ~= "string" or name == "" then
+            return nil
+        end
+        if name:find("/", 1, true) or name:find(".", 1, true) then
+            return nil
+        end
+        return name
+    end
+
+    local function path_of(name)
+        local safe = clean(name)
+        if not safe then
+            return nil
+        end
+        return folder .. "/" .. safe .. ".cfg"
+    end
+
+    local DriftConfig = {}
+
+    function DriftConfig.list()
+        ensure()
+        local out = {}
+        local ok, files = pcall(listfiles, folder)
+        if not ok or type(files) ~= "table" then
+            return out
+        end
+
+        local prefix = #folder + 2
+        for _, file in ipairs(files) do
+            local extension = file:match("%.([^%.]+)$")
+            if extension and extension:lower() == "cfg" then
+                local name = file:sub(prefix, -5)
+                if name ~= "" then
+                    out[#out + 1] = name
+                end
+            end
+        end
+
+        table.sort(out)
+        return out
+    end
+
+    -- encrypted blob, exactly the bytes juju writes; this is what gets shared
+    function DriftConfig.export(name)
+        local path = path_of(name)
+        if not path or type(isfile) ~= "function" or not isfile(path) then
+            return nil
+        end
+
+        local ok, blob = pcall(readfile, path)
+        if not ok or type(blob) ~= "string" then
+            return nil
+        end
+
+        if type(setclipboard) == "function" then
+            pcall(setclipboard, blob)
+        end
+        return blob
+    end
+
+    -- decoded json, for reading or hand-editing before a re-import
+    function DriftConfig.readable(name)
+        local blob = DriftConfig.export(name)
+        local menu = api()
+        if not blob or not menu or type(menu.get_config_data) ~= "function" then
+            return nil
+        end
+
+        local ok, data = pcall(menu.get_config_data, blob)
+        if not ok or type(data) ~= "table" then
+            return nil
+        end
+
+        local encoded, json = pcall(function()
+            return game:GetService("HttpService"):JSONEncode(data)
+        end)
+        if encoded and type(json) == "string" then
+            return json
+        end
+        return nil
+    end
+
+    function DriftConfig.save(name)
+        local menu = api()
+        if not menu or type(menu.save_config) ~= "function" or not clean(name) then
+            return false
+        end
+        ensure()
+        local ok = pcall(menu.save_config, name)
+        return ok
+    end
+
+    function DriftConfig.load(name)
+        local menu = api()
+        if not menu or type(menu.load_config) ~= "function" or not clean(name) then
+            return false
+        end
+        local ok = pcall(menu.load_config, name)
+        return ok
+    end
+
+    -- paste a blob someone sent, land the file, load it if the menu is up
+    function DriftConfig.import(name, blob)
+        local path = path_of(name)
+        if not path or type(blob) ~= "string" or #blob < 16 then
+            return false
+        end
+        if type(writefile) ~= "function" then
+            return false
+        end
+
+        ensure()
+        local ok = pcall(writefile, path, blob)
+        if not ok then
+            return false
+        end
+
+        DriftConfig.load(name)
+        return true
+    end
+
+    getgenv().DriftConfig = DriftConfig
+end
+]==]
+
 source = lit(
     source,
     "-- ----------------------------------------------------------------- finish ---",
-    LOCK_RUNTIME .. SKIN_RUNTIME .. MOVE_RUNTIME .. espChunk .. "-- ----------------------------------------------------------------- finish ---"
+    LOCK_RUNTIME .. SKIN_RUNTIME .. MOVE_RUNTIME .. CONFIG_RUNTIME .. espChunk .. "-- ----------------------------------------------------------------- finish ---"
 )
 
 -- --------------------------------------------------------- juju ui edits ---
