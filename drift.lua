@@ -4,7 +4,10 @@
     Loads the tea.cc loader, then rewrites it before it compiles:
 
       - window 575x450 -> 690x552 (content area 430 -> 532), left column
-        overflow threshold 405 -> 507 so the frame still grows correctly
+        overflow threshold 405 -> 507 so the frame still grows correctly.
+        Anchored on tea.cc's recolour helper; if that seam ever moves the
+        layout edit is skipped and TAB_HEIGHT reverts to 430, so sections can
+        never be sized for a window that is not there.
       - accent, logo, cursor, crosshair, theme json: pink -> #FFFFFF
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
@@ -1462,10 +1465,21 @@ if type(source) == "string" then
 end
 ]==]
 
-source = lit(
-    source,
-    'if not okFetch or type(source) ~= "string" or #source < 1000 then',
-    UI_PATCH .. '\nif not okFetch or type(source) ~= "string" or #source < 1000 then'
+-- Anchor: tea.cc now resolves juju through a disk cache, so its old okFetch
+-- line is gone. The recolour helper below the fetch is required by every
+-- colour edit, which makes it the stable seam for the juju-side patch.
+local UI_ANCHOR = "local function swap(text, find, replace)"
+local patched = lit(source, UI_ANCHOR, UI_PATCH .. "\n" .. UI_ANCHOR)
+
+if patched == source or not patched:find("690", 1, true) then
+    -- juju is still 575x450, so the 532 content height would size every
+    -- section too short and push its rows past their boxes. Put the layout
+    -- back instead of shipping a menu with checkboxes hanging off the bottom.
+    source = lit(source, "local TAB_HEIGHT = 532", "local TAB_HEIGHT = 430")
+    warn("[drift] juju ui patch did not apply - menu left at stock 575x450")
+else
+    source = patched
+end ~= "string" or #source < 1000 then'
 )
 
 -- ----------------------------------------------------------------- compile --
