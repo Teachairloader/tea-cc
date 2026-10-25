@@ -9,9 +9,12 @@
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
       - loader folder tea.cc -> drift
-      - adds a silent aim section under aimbot: wraps GunHandler.getAim so
-        the aim vector is produced server-side of the camera, flag-gated,
-        with the original function preserved for every off-path
+      - adds a silent aim section under aimbot: __namecall hook rewrites the
+        direction / aim-point argument of FireServer calls toward the picked
+        target, so shots curve while the camera stays put; tracer + target dot
+        overlay draws from the same target pick
+      - adds an "overlay esp" section on visuals column 2, body fetched from
+        esp.lua (fonts included) and folded into the same chunk
 
     The window size and the header image live inside the juju source that
     tea.cc fetches, so they are patched at the one point where that source is
