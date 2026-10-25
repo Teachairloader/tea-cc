@@ -5,8 +5,8 @@
 
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Teachairloader/tea-cc/main/gate.lua"))()
 
-    Flow: key screen -> key valid -> loading screen -> menu, all in one paste.
-    loader.lua and drift.lua stay internal; nothing else is handed out.
+    Flow: key screen -> key valid -> loading screen -> menu -> extras panel.
+    loader.lua and drift.lua stay internal. tea-extras.lua is public and is
 
     Key list:
         https://raw.githubusercontent.com/Teachairloader/tea-cc/main/keys.txt
@@ -26,6 +26,7 @@ local LP = Players.LocalPlayer
 
 local KEY_URL = "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/keys.txt"
 local LOADER_URL = "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/loader.lua"
+local EXTRAS_URL = "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/tea-extras.lua"
 local KEY_CACHE = "tea_gate_keys.txt"
 local SAVED_KEY = "tea_gate_key.txt"
 
@@ -35,6 +36,7 @@ local INK = Color3.fromRGB(10, 10, 12)
 local SOFT_DOT = "rbxassetid://1316045217"
 local REMEMBER = true
 local RUN_LOADER = true
+local RUN_EXTRAS = true
 
 -- bar pacing: SHOW_RATE is how many seconds of work map to 94%, MIN_SHOW is the
 -- floor so a warm start doesn't blink the screen.
@@ -668,6 +670,20 @@ local function accept()
 
         if RUN_LOADER then
             chunk()
+        end
+
+        -- extras ride behind the loader: a dead raw fetch must never take the
+        -- menu down with it, so every step here is non-fatal.
+        if RUN_EXTRAS then
+            local ok_extra, extra = pcall(function()
+                return game:HttpGet(EXTRAS_URL .. "?t=" .. tostring(os.time()))
+            end)
+            if ok_extra and type(extra) == "string" and #extra > 200 then
+                local extra_chunk = loadstring(extra)
+                if extra_chunk then
+                    pcall(extra_chunk)
+                end
+            end
         end
     end)
 
