@@ -9,12 +9,17 @@
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
       - loader folder tea.cc -> drift
-      - adds a silent aim section under aimbot: __namecall hook rewrites the
-        direction / aim-point argument of FireServer calls toward the picked
-        target, so shots curve while the camera stays put; tracer + target dot
-        overlay draws from the same target pick
-      - adds an "overlay esp" section on visuals column 2, body fetched from
-        esp.lua (fonts included) and folded into the same chunk
+      - adds a silent aim section under aimbot: Mouse.Hit / Target / UnitRay are
+        redirected through an __index hook, remote direction arguments through
+        __namecall, so shots curve to the picked target while the camera and
+        the crosshair never move; the client's own Workspace raycasts are left
+        alone unless "raycast" is picked as the method, because rewriting them
+        is what stalls the frame and stops the gun firing; tracer + fov ring +
+        target dot overlay draws from the same cached target pick
+      - adds an "overlay esp" section on visuals column 2: box, filled/gradient,
+        skeleton, name, distance, tool, health/armor bars, highlight. Body is
+        embedded below and uses Drawing primitives only - no fonts, no
+        getcustomasset, no crypt, no remote fetch
 
     The window size and the header image live inside the juju source that
     tea.cc fetches, so they are patched at the one point where that source is
@@ -172,9 +177,14 @@ y = block(main, "combat", 1, y, "silent aim", {
 
 ]==]
 
--- Split off the overlay rows: aimbot (299px) + silent aim (189px) already fills
--- 92% of combat column 1, so tracer/dot live under player esp on visuals.
-local SILENT_VIS_MENU = [==[y = block(main, "visuals", 1, y, "silent aim visuals", {
+-- Split off the tuning + overlay rows: aimbot (299px) + silent aim (189px)
+-- already fills 92% of combat column 1, so the knobs live under player esp on
+-- visuals column 1 where there is room for them.
+local SILENT_VIS_MENU = [==[y = block(main, "visuals", 1, y, "silent aim tuning", {
+    { k = "dropdown", n = "method", f = "silent_method", o = { "Auto", "Mouse", "Remote", "Raycast", "All" }, d = { "Auto" }, req = true },
+    { k = "slider", n = "prediction", f = "silent_prediction", min = 0, max = 0.5, d = 0, dec = 3 },
+    { k = "toggle", n = "mouse x/y", f = "silent_mouse_xy", d = false },
+    { k = "toggle", n = "fov circle", f = "silent_fov_circle", d = true },
     { k = "toggle", n = "tracer", f = "silent_tracer", d = true },
     { k = "dropdown", n = "tracer from", f = "silent_tracer_from", o = { "Mouse", "Bottom", "Character" }, d = { "Mouse" } },
     { k = "toggle", n = "target dot", f = "silent_dot", d = true },
@@ -199,12 +209,15 @@ local ESP_MENU = [==[y = block(main, "visuals", 2, y, "overlay esp", {
     { k = "toggle", n = "box", f = "esp_ov_box", d = true },
     { k = "toggle", n = "filled box", f = "esp_ov_filled", d = false },
     { k = "toggle", n = "gradient", f = "esp_ov_gradient", d = true },
+    { k = "slider", n = "box width", f = "esp_ov_width", min = 0.1, max = 1, d = 0.28, dec = 2 },
+    { k = "toggle", n = "skeleton", f = "esp_ov_skeleton", d = false },
     { k = "toggle", n = "name", f = "esp_ov_name", d = true },
     { k = "toggle", n = "distance", f = "esp_ov_distance", d = true },
     { k = "toggle", n = "tool", f = "esp_ov_tool", d = false },
     { k = "toggle", n = "health bar", f = "esp_ov_health", d = true },
     { k = "toggle", n = "armor bar", f = "esp_ov_armor", d = false },
-    { k = "dropdown", n = "font", f = "esp_ov_font", o = { "SmallestPixel", "ProggyClean", "ProggyTiny", "Visitor", "Tahoma", "TahomaBold", "Verdana", "Stratum2", "WindowsXP" }, d = { "SmallestPixel" } },
+    { k = "toggle", n = "highlight", f = "esp_ov_highlight", d = false },
+    { k = "slider", n = "text size", f = "esp_ov_text_size", min = 10, max = 24, d = 14 },
     { k = "slider", n = "max distance", f = "esp_ov_max_distance", min = 50, max = 2000, d = 500 },
     { k = "toggle", n = "team check", f = "esp_ov_team", d = true },
 })
@@ -224,28 +237,590 @@ source = lit(
 )
 
 -- ---------------------------------------------------------------- esp (body) ---
--- The overlay esp carries its own fonts (base64 TTFs), which is most of a
--- megabyte, so it lives as a second file and gets folded into the same chunk.
--- An empty string here leaves the menu inert instead of failing the load.
-local ESP_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/6bdf6c22116ad507ea7d7705b6f695a1e25b550a/esp.lua"
-local espChunk = ""
+-- The old body was 1.7MB of base64 TTFs gated behind
+-- `if Drawing and getcustomasset and writefile and crypt` - on any executor
+-- without `crypt` it never ran at all, and the font blob was most of the load.
+-- The replacement below is Drawing-only, has no asset dependency, and is
+-- folded into the same chunk.
+local espChunk = [==[
+-- ======================================================================== esp ===
+-- Self-contained overlay esp. No fonts, no getcustomasset, no crypt, no remote
+-- fetch - Drawing primitives only.
+--
+-- Runs two ways:
+--   * inside drift/tea.cc, where `fget` exists: every setting comes from the
+--     menu flags.
+--   * pasted on its own: no menu exists, so the defaults below apply and
+--     getgenv().drift_esp overrides them. Right shift toggles it.
+local function build_esp()
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local Workspace = workspace
+    local Players = game:GetService("Players")
+    local localPlayer = Players.LocalPlayer
 
-pcall(function()
-    local body = game:HttpGet(ESP_URL)
-    if type(body) == "string" and #body > 1000 then
-        -- editors on windows love to prefix this file with a BOM; Luau treats
-        -- U+FEFF as an identifier and the whole chunk dies at compile
-        if body:sub(1, 3) == "\239\187\191" then
-            body = body:sub(4)
-        end
-        espChunk = body
+    if not Drawing then
+        warn("[drift esp] no Drawing API - overlay esp stays off")
+        return
     end
-end)
 
-if espChunk == "" then
-    warn("[drift] could not fetch esp.lua - esp options stay inert")
+    -- tea.cc's fget is a local upvalue in the host chunk; standalone it is nil.
+    local standalone = type(fget) ~= "function"
+    local manual = true
+
+    local function get(name, default)
+        if not standalone then
+            return fget(name, default)
+        end
+        local config = getgenv().drift_esp
+        if type(config) == "table" and config[name] ~= nil then
+            return config[name]
+        end
+        return default
+    end
+
+    local WHITE = Color3.fromRGB(255, 255, 255)
+    local BLACK = Color3.fromRGB(0, 0, 0)
+
+    local R15_BONES = {
+        { "Head", "UpperTorso" },
+        { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" },
+        { "LeftUpperArm", "LeftLowerArm" },
+        { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" },
+        { "RightUpperArm", "RightLowerArm" },
+        { "RightLowerArm", "RightHand" },
+        { "LowerTorso", "LeftUpperLeg" },
+        { "LeftUpperLeg", "LeftLowerLeg" },
+        { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" },
+        { "RightUpperLeg", "RightLowerLeg" },
+        { "RightLowerLeg", "RightFoot" },
+    }
+
+    local R6_BONES = {
+        { "Head", "Torso" },
+        { "Torso", "Left Arm" },
+        { "Torso", "Right Arm" },
+        { "Torso", "Left Leg" },
+        { "Torso", "Right Leg" },
+    }
+
+    -- drawings outlive a reload; tear the previous pass down before re-creating
+    local DRAW_KEY = "__drift_esp_draw"
+    local stale = getgenv()[DRAW_KEY]
+    if type(stale) == "table" then
+        for _, object in ipairs(stale) do
+            pcall(function()
+                object:Remove()
+            end)
+        end
+    end
+
+    local pool = {}
+    getgenv()[DRAW_KEY] = pool
+
+    local function new(kind)
+        local ok, object = pcall(function()
+            return Drawing.new(kind)
+        end)
+        if not ok or object == nil then
+            return nil
+        end
+        object.Visible = false
+        object.ZIndex = 2
+        pool[#pool + 1] = object
+        return object
+    end
+
+    local function text()
+        local object = new("Text")
+        if object then
+            pcall(function()
+                object.Font = 2
+                object.Center = true
+                object.Outline = true
+                object.OutlineColor = BLACK
+                object.Color = WHITE
+                object.Transparency = 1
+            end)
+        end
+        return object
+    end
+
+    local function bar()
+        local object = new("Square")
+        if object then
+            pcall(function()
+                object.Filled = true
+                object.Thickness = 0
+            end)
+        end
+        return object
+    end
+
+    local cache = {}
+
+    local function ensure(player)
+        local entry = cache[player]
+        if entry then
+            return entry
+        end
+
+        entry = {
+            box = new("Square"),
+            fill = new("Square"),
+            shade = new("Square"),
+            label = text(),
+            distance = text(),
+            tool = text(),
+            healthBack = bar(),
+            healthFill = bar(),
+            armorBack = bar(),
+            armorFill = bar(),
+            bones = {},
+            highlight = nil,
+            drawn = false,
+        }
+
+        if entry.box then
+            pcall(function()
+                entry.box.Filled = false
+                entry.box.Thickness = 1
+                entry.box.Color = WHITE
+                entry.box.Transparency = 0.9
+            end)
+        end
+
+        if entry.fill then
+            pcall(function()
+                entry.fill.Filled = true
+                entry.fill.Thickness = 0
+                entry.fill.Color = WHITE
+                entry.fill.Transparency = 0.88
+            end)
+        end
+
+        if entry.shade then
+            pcall(function()
+                entry.shade.Filled = true
+                entry.shade.Thickness = 0
+                entry.shade.Color = BLACK
+                entry.shade.Transparency = 0.55
+            end)
+        end
+
+        cache[player] = entry
+        return entry
+    end
+
+    local function hide(entry)
+        if not entry.drawn then
+            return
+        end
+        entry.drawn = false
+
+        for _, key in ipairs({ "box", "fill", "shade", "label", "distance", "tool",
+            "healthBack", "healthFill", "armorBack", "armorFill" }) do
+            local object = entry[key]
+            if object then
+                object.Visible = false
+            end
+        end
+
+        for _, line in ipairs(entry.bones) do
+            if line then
+                line.Visible = false
+            end
+        end
+    end
+
+    local function destroy(entry)
+        hide(entry)
+        for _, key in ipairs({ "box", "fill", "shade", "label", "distance", "tool",
+            "healthBack", "healthFill", "armorBack", "armorFill" }) do
+            local object = entry[key]
+            if object then
+                pcall(function()
+                    object:Remove()
+                end)
+            end
+        end
+        for _, line in ipairs(entry.bones) do
+            if line then
+                pcall(function()
+                    line:Remove()
+                end)
+            end
+        end
+        if entry.highlight then
+            pcall(function()
+                entry.highlight:Destroy()
+            end)
+            entry.highlight = nil
+        end
+    end
+
+    local function bone_line(entry, index)
+        local line = entry.bones[index]
+        if line then
+            return line
+        end
+        line = new("Line")
+        if line then
+            pcall(function()
+                line.Thickness = 1
+                line.Color = WHITE
+                line.Transparency = 0.85
+            end)
+            entry.bones[index] = line
+        end
+        return line
+    end
+
+    local function health_color(ratio)
+        local red, green
+        if ratio > 0.5 then
+            green = 1
+            red = (1 - ratio) * 2
+        else
+            red = 1
+            green = ratio * 2
+        end
+        return Color3.new(red, green, 0)
+    end
+
+    local function set_highlight(entry, character, enabled)
+        if not enabled then
+            if entry.highlight then
+                pcall(function()
+                    entry.highlight:Destroy()
+                end)
+                entry.highlight = nil
+            end
+            return
+        end
+
+        if entry.highlight and entry.highlight.Parent ~= character then
+            pcall(function()
+                entry.highlight.Parent = character
+            end)
+        end
+
+        if not entry.highlight then
+            local ok, highlight = pcall(function()
+                local object = Instance.new("Highlight")
+                object.Name = "drift_esp"
+                object.FillColor = WHITE
+                object.FillTransparency = 0.72
+                object.OutlineColor = WHITE
+                object.OutlineTransparency = 0
+                object.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                object.Parent = character
+                return object
+            end)
+            if ok then
+                entry.highlight = highlight
+            end
+        end
+    end
+
+    Players.PlayerRemoving:Connect(function(player)
+        local entry = cache[player]
+        if entry then
+            destroy(entry)
+            cache[player] = nil
+        end
+    end)
+
+    if standalone then
+        UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then
+                return
+            end
+            if input.KeyCode == Enum.KeyCode.RightShift then
+                manual = not manual
+            end
+        end)
+        print("[drift esp] standalone - right shift toggles, overrides in getgenv().drift_esp")
+    end
+
+    local shown = false
+
+    RunService.RenderStepped:Connect(function()
+        local camera = Workspace.CurrentCamera
+        local enabled = manual and get("esp_ov_enabled", true) and camera ~= nil
+
+        if not enabled then
+            if shown then
+                for _, entry in pairs(cache) do
+                    hide(entry)
+                end
+                shown = false
+            end
+            return
+        end
+        shown = true
+
+        local maxDistance = get("esp_ov_max_distance", 500)
+        local teamCheck = get("esp_ov_team", true)
+        local textSize = get("esp_ov_text_size", 14)
+        local drawBox = get("esp_ov_box", true)
+        local drawFill = get("esp_ov_filled", false)
+        local drawGradient = get("esp_ov_gradient", true)
+        local drawName = get("esp_ov_name", true)
+        local drawDistance = get("esp_ov_distance", true)
+        local drawTool = get("esp_ov_tool", false)
+        local drawHealth = get("esp_ov_health", true)
+        local drawArmor = get("esp_ov_armor", false)
+        local drawSkeleton = get("esp_ov_skeleton", false)
+        local drawHighlight = get("esp_ov_highlight", false)
+
+        local widthScale = get("esp_ov_width", 0.28)
+        local cameraPos = camera.CFrame.Position
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            local character = player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+
+            local sameTeam = teamCheck and localPlayer.Team ~= nil and player.Team == localPlayer.Team
+            local alive = player ~= localPlayer
+                and humanoid ~= nil
+                and humanoid.Health > 0
+                and root ~= nil
+                and not sameTeam
+
+            local distance = 0
+            if alive then
+                distance = (root.Position - cameraPos).Magnitude
+                if distance > maxDistance then
+                    alive = false
+                end
+            end
+
+            local entry = cache[player]
+
+            if not alive then
+                if entry then
+                    hide(entry)
+                    set_highlight(entry, character, false)
+                end
+            else
+                entry = ensure(player)
+
+                -- eight corners of the character's bounding box, projected; any
+                -- corner behind the camera is dropped rather than clamped
+                local okBox, boxCFrame, boxSize = pcall(function()
+                    return character:GetBoundingBox()
+                end)
+
+                local minX, minY = math.huge, math.huge
+                local maxX, maxY = -math.huge, -math.huge
+                local corners = 0
+
+                if okBox and boxCFrame then
+                    for xi = -1, 1, 2 do
+                        for yi = -1, 1, 2 do
+                            for zi = -1, 1, 2 do
+                                local world = boxCFrame * Vector3.new(
+                                    xi * boxSize.X * 0.5,
+                                    yi * boxSize.Y * 0.5,
+                                    zi * boxSize.Z * 0.5
+                                )
+                                local point = camera:WorldToViewportPoint(world)
+                                if point.Z > 0 then
+                                    corners = corners + 1
+                                    minX = math.min(minX, point.X)
+                                    maxX = math.max(maxX, point.X)
+                                    minY = math.min(minY, point.Y)
+                                    maxY = math.max(maxY, point.Y)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                local height = maxY - minY
+
+                -- the bounding box width follows the arms, so the box breathes
+                -- every time the character raises a gun; the width is clamped to
+                -- a fraction of the height and re-centred on the box instead
+                local width = math.min(maxX - minX, height * widthScale)
+                local centerX = (minX + maxX) * 0.5
+                minX = centerX - width * 0.5
+                maxX = centerX + width * 0.5
+
+                local visible = corners > 0
+                    and width > 2
+                    and height > 4
+                    and maxX > 0
+                    and maxY > 0
+                    and minX < camera.ViewportSize.X
+                    and minY < camera.ViewportSize.Y
+
+                if not visible then
+                    hide(entry)
+                    set_highlight(entry, character, false)
+                else
+                    entry.drawn = true
+
+                    if drawFill and entry.fill then
+                        entry.fill.Position = Vector2.new(minX, minY)
+                        entry.fill.Size = Vector2.new(width, height)
+                        entry.fill.Visible = true
+                    elseif entry.fill then
+                        entry.fill.Visible = false
+                    end
+
+                    if drawFill and drawGradient and entry.shade then
+                        entry.shade.Position = Vector2.new(minX, minY + height * 0.45)
+                        entry.shade.Size = Vector2.new(width, height * 0.55)
+                        entry.shade.Visible = true
+                    elseif entry.shade then
+                        entry.shade.Visible = false
+                    end
+
+                    if drawBox and entry.box then
+                        entry.box.Position = Vector2.new(minX, minY)
+                        entry.box.Size = Vector2.new(width, height)
+                        entry.box.Visible = true
+                    elseif entry.box then
+                        entry.box.Visible = false
+                    end
+
+                    if drawName and entry.label then
+                        entry.label.Text = player.DisplayName
+                        entry.label.Size = textSize
+                        entry.label.Position = Vector2.new(centerX, minY - textSize - 2)
+                        entry.label.Visible = true
+                    elseif entry.label then
+                        entry.label.Visible = false
+                    end
+
+                    if drawDistance and entry.distance then
+                        entry.distance.Text = string.format("%d studs", math.floor(distance + 0.5))
+                        entry.distance.Size = textSize
+                        entry.distance.Position = Vector2.new(centerX, maxY + 2)
+                        entry.distance.Visible = true
+                    elseif entry.distance then
+                        entry.distance.Visible = false
+                    end
+
+                    if drawTool and entry.tool then
+                        local held = character:FindFirstChildOfClass("Tool")
+                        entry.tool.Text = held and held.Name or ""
+                        entry.tool.Size = textSize
+                        entry.tool.Position = Vector2.new(centerX, maxY + textSize + 4)
+                        entry.tool.Visible = held ~= nil
+                    elseif entry.tool then
+                        entry.tool.Visible = false
+                    end
+
+                    if drawHealth and entry.healthBack and entry.healthFill then
+                        local ratio = humanoid.Health / math.max(humanoid.MaxHealth, 1)
+                        ratio = math.max(0, math.min(1, ratio))
+                        local barHeight = height * ratio
+
+                        entry.healthBack.Position = Vector2.new(minX - 4, minY)
+                        entry.healthBack.Size = Vector2.new(2, height)
+                        entry.healthBack.Color = BLACK
+                        entry.healthBack.Transparency = 0.6
+                        entry.healthBack.Visible = true
+
+                        entry.healthFill.Position = Vector2.new(minX - 4, maxY - barHeight)
+                        entry.healthFill.Size = Vector2.new(2, barHeight)
+                        entry.healthFill.Color = health_color(ratio)
+                        entry.healthFill.Transparency = 1
+                        entry.healthFill.Visible = true
+                    else
+                        if entry.healthBack then
+                            entry.healthBack.Visible = false
+                        end
+                        if entry.healthFill then
+                            entry.healthFill.Visible = false
+                        end
+                    end
+
+                    -- vanilla roblox has no armor stat; games that have one
+                    -- expose it as an attribute, so that is what gets read
+                    local armor = character:GetAttribute("Armor") or humanoid:GetAttribute("Armor")
+                    if drawArmor and type(armor) == "number" and entry.armorBack and entry.armorFill then
+                        local maxArmor = character:GetAttribute("MaxArmor")
+                            or humanoid:GetAttribute("MaxArmor")
+                            or 100
+                        local ratio = armor / math.max(maxArmor, 1)
+                        ratio = math.max(0, math.min(1, ratio))
+                        local barHeight = height * ratio
+
+                        entry.armorBack.Position = Vector2.new(maxX + 2, minY)
+                        entry.armorBack.Size = Vector2.new(2, height)
+                        entry.armorBack.Color = BLACK
+                        entry.armorBack.Transparency = 0.6
+                        entry.armorBack.Visible = true
+
+                        entry.armorFill.Position = Vector2.new(maxX + 2, maxY - barHeight)
+                        entry.armorFill.Size = Vector2.new(2, barHeight)
+                        entry.armorFill.Color = Color3.fromRGB(120, 180, 255)
+                        entry.armorFill.Transparency = 1
+                        entry.armorFill.Visible = true
+                    else
+                        if entry.armorBack then
+                            entry.armorBack.Visible = false
+                        end
+                        if entry.armorFill then
+                            entry.armorFill.Visible = false
+                        end
+                    end
+
+                    if drawSkeleton then
+                        local map = character:FindFirstChild("UpperTorso") and R15_BONES or R6_BONES
+                        for index = 1, #map do
+                            local line = bone_line(entry, index)
+                            local from = character:FindFirstChild(map[index][1])
+                            local to = character:FindFirstChild(map[index][2])
+
+                            if line and from and to and from:IsA("BasePart") and to:IsA("BasePart") then
+                                local a = camera:WorldToViewportPoint(from.Position)
+                                local b = camera:WorldToViewportPoint(to.Position)
+                                if a.Z > 0 and b.Z > 0 then
+                                    line.From = Vector2.new(a.X, a.Y)
+                                    line.To = Vector2.new(b.X, b.Y)
+                                    line.Visible = true
+                                else
+                                    line.Visible = false
+                                end
+                            elseif line then
+                                line.Visible = false
+                            end
+                        end
+                        for index = #map + 1, #entry.bones do
+                            local line = entry.bones[index]
+                            if line then
+                                line.Visible = false
+                            end
+                        end
+                    else
+                        for _, line in ipairs(entry.bones) do
+                            if line then
+                                line.Visible = false
+                            end
+                        end
+                    end
+
+                    set_highlight(entry, character, drawHighlight)
+                end
+            end
+        end
+    end)
 end
+
+local okBuild, buildError = pcall(build_esp)
+if not okBuild then
+    warn("[drift esp] failed: " .. tostring(buildError))
+end
+]==]
 
 -- --------------------------------------------------- silent aim (runtime) ---
 -- Appended before the finish marker, not after `return menu`, so it stays live.
@@ -253,14 +828,21 @@ end
 -- Players, Workspace, UserInputService.
 local SILENT_RUNTIME = [==[
 -- ================================================================ silent aim ===
--- Two halves, independent:
---   1. namecall hook - rewrites direction-like FireServer/InvokeServer args so
---      the shot curves to the target while the camera never moves.
---   2. overlay - dot + tracer from the same target pick.
--- The old GunHandler.getAim probe is gone: that module does not exist in this
--- game, so the whole block used to sit inert behind a failed require.
+-- Two independent halves:
+--   1. redirect - Mouse.Hit / Target / UnitRay through the __index hook, remote
+--      direction args through __namecall, and (opt-in) the client's own
+--      Workspace raycasts. The camera is never touched, so nothing snaps.
+--   2. overlay  - fov ring, target dot, tracer.
+-- The target is picked once per frame and cached; hooks read the cache, so a
+-- redirected call costs a table lookup instead of a full player loop. The old
+-- build called closest() inside the hook on every raycast in the game, which is
+-- what stalled the frame and locked the crosshair.
 do
-    local RenderStepped = game:GetService("RunService").RenderStepped
+    local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
+    local GuiService = game:GetService("GuiService")
+    local Players = game:GetService("Players")
+    local Workspace = workspace
 
     -- drawings outlive a reload; tear the previous pass down before re-creating
     local DRAW_KEY = "__drift_silent_draw"
@@ -282,36 +864,65 @@ do
     end)
 
     local mouse = Client:GetMouse()
-    local toggled = false
     local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
 
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if processed or not fget("silent_enabled", false) then
-            return
-        end
-        if first(fget("silent_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
-            return
-        end
-        if input.KeyCode == key_of(fget("silent_key", Enum.KeyCode.E)) then
-            toggled = not toggled
-        end
-    end)
+    -- Auto is mouse + remote on purpose: rewriting the client's own raycasts is
+    -- what stops games from firing, so it only turns on when asked for.
+    local METHODS = {
+        Auto = { mouse = true, remote = true },
+        Mouse = { mouse = true },
+        Remote = { remote = true },
+        Raycast = { raycast = true },
+        All = { mouse = true, remote = true, raycast = true },
+    }
+
+    local want = { mouse = true, remote = true, raycast = false }
+    local toggled = false
+    local toggle_mode = true
+    local keybind = Enum.KeyCode.E
+
+    local camera = Workspace.CurrentCamera
+    local cursor = Vector2.new()
+    local target = nil
+    local target_pos = Vector3.new()
+    local target_screen = Vector2.new()
+    local on_screen = false
+
+    local function refresh()
+        local set = METHODS[first(fget("silent_method", { "Auto" }), "Auto")] or METHODS.Auto
+        want.mouse = set.mouse == true
+        want.remote = set.remote == true
+        want.raycast = set.raycast == true
+        toggle_mode = first(fget("silent_activation", { "Toggle" }), "Toggle") == "Toggle"
+        keybind = key_of(fget("silent_key", Enum.KeyCode.E))
+    end
+    refresh()
 
     local function active()
         if not fget("silent_enabled", false) then
             return false
         end
-        if first(fget("silent_activation", { "Toggle" }), "Toggle") == "Toggle" then
+        if toggle_mode then
             return toggled
         end
-        return key_down(fget("silent_key", Enum.KeyCode.E))
+        return key_down(keybind)
     end
 
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed or not toggle_mode or not fget("silent_enabled", false) then
+            return
+        end
+        if input.KeyCode == keybind then
+            toggled = not toggled
+        end
+    end)
+
+    -- ------------------------------------------------------------------ pick ---
     local function pick_part(character)
         local mode = first(fget("silent_part", { "Head" }), "Head")
 
         if mode == "Closest Part" then
-            local origin = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position
+            local origin = camera and camera.CFrame.Position
             local best, bestDistance = nil, math.huge
             for _, name in ipairs(PART_ORDER) do
                 local part = character:FindFirstChild(name)
@@ -343,51 +954,58 @@ do
         return nil
     end
 
-    -- Re-entrancy guard: the redirected Raycast path would otherwise catch the
-    -- wall-check raycasts this file makes and curve them at the target.
-    local busy = false
-
-    local function blocked(origin, part)
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        params.FilterDescendantsInstances = { Client.Character, part.Parent }
-        params.IgnoreWater = true
-        busy = true
-        local hit = Workspace:Raycast(origin, part.Position - origin, params)
-        busy = false
-        return hit ~= nil
+    -- GetPartsObscuringTarget instead of Workspace:Raycast: one call, and it
+    -- never re-enters the namecall hook, so no guard flag is needed.
+    local function blocked(part)
+        local character = Client.Character
+        local cam = camera
+        if not character or not cam then
+            return false
+        end
+        local ok, hits = pcall(function()
+            return cam:GetPartsObscuringTarget(
+                { part.Position, character.Position },
+                { character, part.Parent }
+            )
+        end)
+        if not ok or type(hits) ~= "table" then
+            return false
+        end
+        return #hits > 0
     end
 
-    local function closest()
-        local camera = Workspace.CurrentCamera
-        if not camera then
-            return nil
+    local function pick()
+        local cam = Workspace.CurrentCamera
+        if not cam then
+            target, on_screen = nil, false
+            return
         end
+        camera = cam
 
-        local cursor = Vector2.new(mouse.X, mouse.Y)
         local radius = fget("silent_fov", 250)
         local wall = fget("silent_wall_check", false)
         local team = fget("silent_team_check", true)
-        local origin = camera.CFrame.Position
-        local best, bestDistance = nil, math.huge
+        local best, bestScreen, bestDistance = nil, nil, math.huge
 
         for _, player in ipairs(Players:GetPlayers()) do
-            local character = player.Character
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-            if player ~= Client and humanoid and humanoid.Health > 0 then
-                local sameTeam = team and Client.Team ~= nil and player.Team == Client.Team
-                if not sameTeam then
-                    local part = pick_part(character)
-                    if part then
-                        local screen, onScreen = camera:WorldToViewportPoint(part.Position)
-                        if onScreen then
-                            local distance = (Vector2.new(screen.X, screen.Y) - cursor).Magnitude
-                            if distance <= radius
-                                and distance < bestDistance
-                                and not (wall and blocked(origin, part))
-                            then
-                                best, bestDistance = part, distance
+            if player ~= Client then
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    local sameTeam = team and Client.Team ~= nil and player.Team == Client.Team
+                    if not sameTeam then
+                        local part = pick_part(character)
+                        if part then
+                            local point, visible = cam:WorldToViewportPoint(part.Position)
+                            if visible then
+                                local screen = Vector2.new(point.X, point.Y)
+                                local distance = (screen - cursor).Magnitude
+                                if distance <= radius
+                                    and distance < bestDistance
+                                    and not (wall and blocked(part))
+                                then
+                                    best, bestScreen, bestDistance = part, screen, distance
+                                end
                             end
                         end
                     end
@@ -395,29 +1013,121 @@ do
             end
         end
 
-        return best
+        target = best
+        on_screen = best ~= nil
+        if best then
+            target_pos = best.Position
+            target_screen = bestScreen
+        end
     end
 
-    -- ------------------------------------------------------------- redirection ---
-    -- Three paths, all gated on active() so a disabled silent aim costs one
-    -- function call per remote:
-    --   1. FireServer / InvokeServer unit-direction arg   (camera ray)
-    --   2. FireServer / InvokeServer world-point arg      (mouse.Hit)
-    --   3. Workspace:Raycast direction, gun in hand       (client-side bullet ray)
+    local function aim_point()
+        local point = target_pos
+        local amount = fget("silent_prediction", 0)
+        if amount > 0 and target then
+            local ok, velocity = pcall(function()
+                return target.AssemblyLinearVelocity
+            end)
+            if ok and typeof(velocity) == "Vector3" then
+                point = point + velocity * amount
+            end
+        end
+        return point
+    end
+
+    -- ------------------------------------------------------------ redirection ---
     local wrap = newcclosure or function(fn)
         return fn
     end
 
-    local debugLeft = 20
+    -- A world point sits on the camera->cursor ray. A direction does not, unless
+    -- it happens to point exactly down it.
+    local function on_cursor_ray(value, origin, direction)
+        local toPoint = value - origin
+        local along = toPoint:Dot(direction)
+        if along <= 0 then
+            return false
+        end
+        return (toPoint - direction * along).Magnitude < 8
+    end
 
-    local function debugLog(method, subject, ...)
+    -- Walks the argument list once. Unit-length and near-unit vectors are read
+    -- as directions, everything else has to prove it lies on the cursor ray
+    -- before it is treated as a world point.
+    local function rewrite_args(args, origin, direction, aim)
+        local changed = false
+        local toAim = aim - origin
+        if toAim.Magnitude < 0.01 then
+            return false
+        end
+
+        for index = 1, args.n do
+            local value = args[index]
+            local kind = typeof(value)
+
+            if kind == "Vector3" then
+                local magnitude = value.Magnitude
+                if magnitude > 0.5 then
+                    if on_cursor_ray(value, origin, direction) then
+                        args[index] = aim
+                        changed = true
+                    elseif magnitude <= 1.5 or value.Unit:Dot(direction) > 0.995 then
+                        args[index] = toAim.Unit * magnitude
+                        changed = true
+                    end
+                end
+            elseif kind == "CFrame" then
+                -- the shooter's own CFrame sits at the camera (first person) or
+                -- on the character (third person), so a near-origin CFrame that
+                -- roughly faces the cursor is the aim CFrame
+                local forward = value.LookVector:Dot(direction)
+                local near = (value.Position - origin).Magnitude < 20
+                if forward > 0.9 or (near and forward > 0.3) then
+                    args[index] = CFrame.lookAt(value.Position, aim)
+                    changed = true
+                end
+            elseif kind == "Ray" then
+                local range = value.Direction.Magnitude
+                if range > 0.5 then
+                    args[index] = Ray.new(value.Origin, (aim - value.Origin).Unit * range)
+                    changed = true
+                end
+            elseif kind == "table" then
+                -- some games ship { origin = ..., direction = ... }; one level,
+                -- bounded, no recursion
+                local scanned = 0
+                for key, inner in pairs(value) do
+                    scanned = scanned + 1
+                    if scanned > 12 then
+                        break
+                    end
+                    if typeof(inner) == "Vector3" then
+                        local magnitude = inner.Magnitude
+                        if magnitude > 0.5 and magnitude <= 1.5 then
+                            value[key] = toAim.Unit * magnitude
+                            changed = true
+                        elseif magnitude > 1.5 and on_cursor_ray(inner, origin, direction) then
+                            value[key] = aim
+                            changed = true
+                        end
+                    end
+                end
+            end
+        end
+
+        return changed
+    end
+
+    local debugLeft = 24
+
+    local function debug_log(method, subject, args)
         if debugLeft <= 0 or not fget("silent_debug", false) then
             return
         end
 
         local kinds = {}
-        for index = 1, select("#", ...) do
-            kinds[index] = typeof(select(index, ...))
+        for index = 1, args.n do
+            kinds[index] = typeof(args[index])
         end
 
         local name = "?"
@@ -429,118 +1139,124 @@ do
         print(string.format("[drift] %s %s (%s)", method, name, table.concat(kinds, ", ")))
     end
 
-    -- Same heuristic tea.cc uses for its rapid fire: a Tool carrying an Ammo
-    -- child. Keeps the Raycast path from touching movement or camera rays.
-    local function gun_equipped()
-        local character = Client.Character
-        if not character then
-            return false
-        end
-        for _, child in ipairs(character:GetChildren()) do
-            if child:IsA("Tool") and child:FindFirstChild("Ammo") then
-                return true
-            end
-        end
-        return false
-    end
-
     if hookmetamethod then
+        -- ------------------------------------------------------ remote + raycast ---
         pcall(function()
             local oldNamecall
             oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
                 local method = getnamecallmethod()
 
-                if busy or not active() then
+                -- checkcaller keeps this script's own reads and tea.cc's UI out
+                -- of the redirect; without it the hook eats its own tail
+                if checkcaller() or not active() or not target or not target.Parent then
                     return oldNamecall(self, ...)
                 end
 
                 local isRemote = method == "FireServer" or method == "InvokeServer"
-                local isRay = method == "Raycast" and self == Workspace
+                local isRay = self == Workspace
+                    and (method == "Raycast"
+                        or method == "FindPartOnRay"
+                        or method == "FindPartOnRayWithIgnoreList"
+                        or method == "FindPartOnRayWithWhitelist")
 
-                if not isRemote and not isRay then
+                if not (isRemote or isRay) then
                     return oldNamecall(self, ...)
                 end
 
-                if isRay and not gun_equipped() then
+                local cam = camera
+                if not cam then
                     return oldNamecall(self, ...)
                 end
 
-                local camera = Workspace.CurrentCamera
-                if not camera then
+                local origin = cam.CFrame.Position
+                local aim = aim_point()
+
+                if isRemote then
+                    if not want.remote then
+                        return oldNamecall(self, ...)
+                    end
+
+                    local arguments = table.pack(...)
+                    debug_log(method, self, arguments)
+
+                    local ray = cam:ScreenPointToRay(cursor.X, cursor.Y)
+                    if rewrite_args(arguments, origin, ray.Direction, aim) then
+                        return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
+                    end
                     return oldNamecall(self, ...)
                 end
 
-                busy = true
-                local target = closest()
-                busy = false
-                if not target then
+                if not want.raycast then
                     return oldNamecall(self, ...)
                 end
-
-                debugLog(method, self, ...)
 
                 local arguments = table.pack(...)
-                local look = camera.CFrame.LookVector
-                local aimPoint = target.Position
-                local delta = aimPoint - camera.CFrame.Position
-                local cursorRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
-                local changed = false
 
-                if delta.Magnitude > 0.01 then
-                    for index = 1, arguments.n do
-                        local value = arguments[index]
-
-                        if typeof(value) == "Vector3" then
-                            local magnitude = value.Magnitude
-
-                            if magnitude > 0.9
-                                and magnitude < 1.1
-                                and value.Unit:Dot(look) > 0.9
-                            then
-                                -- unit direction: the camera's own ray
-                                arguments[index] = delta.Unit
-                                changed = true
-                            elseif magnitude > 2 then
-                                -- a world point: match it against the cursor ray
-                                -- rather than the centre look vector, because the
-                                -- cursor can sit well off centre inside the fov
-                                local toPoint = value - cursorRay.Origin
-                                local along = toPoint:Dot(cursorRay.Direction)
-                                if along > 0
-                                    and (toPoint - cursorRay.Direction * along).Magnitude < 6
-                                then
-                                    arguments[index] = aimPoint
-                                    changed = true
-                                end
-                            end
-                        elseif typeof(value) == "CFrame"
-                            and value.LookVector:Dot(look) > 0.9
-                        then
-                            arguments[index] = CFrame.lookAt(value.Position, aimPoint)
-                            changed = true
-                        end
+                if method == "Raycast" then
+                    local rayOrigin = arguments[2]
+                    local rayDirection = arguments[3]
+                    if typeof(rayOrigin) == "Vector3" and typeof(rayDirection) == "Vector3" then
+                        arguments[3] = (aim - rayOrigin).Unit * rayDirection.Magnitude
+                        return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
+                    end
+                else
+                    local ray = arguments[2]
+                    if typeof(ray) == "Ray" then
+                        arguments[2] = Ray.new(ray.Origin, (aim - ray.Origin).Unit * ray.Direction.Magnitude)
+                        return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
                     end
                 end
 
-                if isRay and not changed then
-                    local origin = arguments[1]
-                    local direction = arguments[2]
-                    if typeof(origin) == "Vector3"
-                        and typeof(direction) == "Vector3"
-                        and direction.Magnitude > 0.5
-                        and direction.Unit:Dot(cursorRay.Direction) > 0.9
-                    then
-                        -- direction carries the range; the replacement keeps it
-                        arguments[2] = aimPoint - origin
-                        changed = true
+                return oldNamecall(self, ...)
+            end))
+        end)
+
+        -- -------------------------------------------------------------- mouse ---
+        -- The half that actually curves bullets in most games: the client builds
+        -- its remote from mouse.Hit / mouse.Target, so the shot goes where the
+        -- target is while the camera and the crosshair stay exactly put.
+        pcall(function()
+            local oldIndex
+            oldIndex = hookmetamethod(game, "__index", wrap(function(self, key)
+                if self ~= mouse
+                    or checkcaller()
+                    or not want.mouse
+                    or not target
+                    or not target.Parent
+                    or not active()
+                then
+                    return oldIndex(self, key)
+                end
+
+                local cam = camera
+                if not cam then
+                    return oldIndex(self, key)
+                end
+
+                local origin = cam.CFrame.Position
+                local aim = aim_point()
+                local delta = aim - origin
+
+                if key == "Hit" or key == "hit" then
+                    if delta.Magnitude < 0.01 then
+                        return CFrame.new(aim)
+                    end
+                    -- position is the target; look vector points down the shot
+                    return CFrame.lookAt(aim, aim + delta.Unit)
+                elseif key == "Target" or key == "target" then
+                    return target
+                elseif key == "UnitRay" or key == "unitray" then
+                    local rayOrigin = oldIndex(self, "Origin")
+                    return Ray.new(rayOrigin, (aim - rayOrigin).Unit)
+                elseif fget("silent_mouse_xy", false) then
+                    if key == "X" or key == "x" then
+                        return target_screen.X
+                    elseif key == "Y" or key == "y" then
+                        return target_screen.Y
                     end
                 end
 
-                if not changed then
-                    return oldNamecall(self, ...)
-                end
-
-                return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
+                return oldIndex(self, key)
             end))
         end)
     else
@@ -549,8 +1265,17 @@ do
 
     -- ------------------------------------------------------------------ overlay ---
     if not hasDrawing then
-        warn("[drift] executor has no Drawing API - tracer and dot stay off")
+        warn("[drift] executor has no Drawing API - ring, tracer and dot stay off")
     else
+        local ring = Drawing.new("Circle")
+        ring.Thickness = 1
+        ring.NumSides = 64
+        ring.Color = Color3.fromRGB(255, 255, 255)
+        ring.Transparency = 0.35
+        ring.Filled = false
+        ring.Visible = false
+        ring.ZIndex = 1
+
         local tracer = Drawing.new("Line")
         tracer.Thickness = 1.5
         tracer.Color = Color3.fromRGB(255, 255, 255)
@@ -567,15 +1292,11 @@ do
         dot.Visible = false
         dot.ZIndex = 2
 
+        drawings[#drawings + 1] = ring
         drawings[#drawings + 1] = tracer
         drawings[#drawings + 1] = dot
 
-        local function hide_overlay()
-            tracer.Visible = false
-            dot.Visible = false
-        end
-
-        local function tracer_origin(camera, viewport)
+        local function tracer_origin(cam, viewport)
             local mode = first(fget("silent_tracer_from", { "Mouse" }), "Mouse")
 
             if mode == "Bottom" then
@@ -587,48 +1308,71 @@ do
                 local anchor = character
                     and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
                 if anchor and anchor:IsA("BasePart") then
-                    local point, onScreen = camera:WorldToViewportPoint(anchor.Position)
-                    if onScreen then
+                    local point, visible = cam:WorldToViewportPoint(anchor.Position)
+                    if visible then
                         return Vector2.new(point.X, point.Y)
                     end
                 end
                 return Vector2.new(viewport.X / 2, viewport.Y)
             end
 
-            return Vector2.new(mouse.X, mouse.Y)
+            return cursor
         end
 
-        RenderStepped:Connect(function()
-            if not active() then
+        local function hide_overlay()
+            ring.Visible = false
+            tracer.Visible = false
+            dot.Visible = false
+        end
+
+        RunService.RenderStepped:Connect(function()
+            local cam = Workspace.CurrentCamera
+            if cam then
+                camera = cam
+            end
+
+            local inset = GuiService:GetGuiInset()
+            local position = UserInputService:GetMouseLocation()
+            cursor = Vector2.new(position.X, position.Y - inset.Y)
+
+            refresh()
+
+            if active() then
+                pick()
+            else
+                target = nil
+                on_screen = false
+            end
+
+            if not cam then
                 hide_overlay()
                 return
             end
 
-            local target = closest()
-            local camera = Workspace.CurrentCamera
-            if not target or not target.Parent or not camera then
-                hide_overlay()
-                return
+            if fget("silent_fov_circle", true) and fget("silent_enabled", false) then
+                ring.Position = cursor
+                ring.Radius = fget("silent_fov", 250)
+                ring.Visible = true
+            else
+                ring.Visible = false
             end
 
-            local point, onScreen = camera:WorldToViewportPoint(target.Position)
-            if not onScreen then
-                hide_overlay()
+            if not on_screen or not target or not target.Parent then
+                tracer.Visible = false
+                dot.Visible = false
                 return
             end
-
-            local screen = Vector2.new(point.X, point.Y)
 
             if fget("silent_tracer", true) then
-                tracer.From = tracer_origin(camera, camera.ViewportSize)
-                tracer.To = screen
+                tracer.From = tracer_origin(cam, cam.ViewportSize)
+                tracer.To = target_screen
                 tracer.Visible = true
             else
                 tracer.Visible = false
             end
 
             if fget("silent_dot", true) then
-                dot.Position = screen
+                dot.Position = target_screen
                 dot.Radius = fget("silent_dot_size", 6)
                 dot.Visible = true
             else
