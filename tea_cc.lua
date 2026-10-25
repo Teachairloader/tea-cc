@@ -192,7 +192,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-25f"
+local VERSION = "2026-10-25g"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -312,6 +312,12 @@ y = block(main, "misc", 2, y, "crosshair", {
     { k = "colorpicker", n = "colour", f = "crosshair_color", d = Color3.fromRGB(255, 121, 198) },
     { k = "toggle", n = "spin", f = "crosshair_spin", d = true },
     { k = "toggle", n = "resize", f = "crosshair_resize", d = true },
+})
+y = block(main, "misc", 2, y, "cframe speed", {
+    { k = "toggle", n = "enabled", f = "cspeed_enabled", d = false },
+    { k = "keybind", n = "bind", f = "cspeed_key", d = Enum.KeyCode.LeftAlt },
+    { k = "slider", n = "speed", f = "cspeed_value", min = 10, max = 400, d = 60, suffix = " s/s" },
+    { k = "toggle", n = "hold", f = "cspeed_hold", d = false },
 })
 
 -- configs (juju's own config list, info and editor) ---------------------
@@ -1483,6 +1489,115 @@ do
     getgenv().TeaOrbit = Orbit
 end
 
+-- --------------------------------------------------------------- cf speed ---
+-- CFrame movement, not WalkSpeed: the humanoid clamp never enters the path, so
+-- the number in the slider is the number you get. One authority - the CFrame
+-- add - and it only fires while WASD is held. A loop that pushes lookVector
+-- every frame regardless of input is what walks you forever with no key down.
+local Speed = { active = false, held = {} }
+
+do
+    local function root()
+        local character = Players.LocalPlayer and Players.LocalPlayer.Character
+        return character and character:FindFirstChild("HumanoidRootPart")
+    end
+
+    -- bindings are KeyCode or UserInputType, same as the aim key
+    local function matches(input, binding)
+        local bound = key_of(binding)
+        if typeof(bound) ~= "EnumItem" then
+            return false
+        end
+        if bound.EnumType == Enum.UserInputType then
+            return input.UserInputType == bound
+        end
+        return input.KeyCode == bound
+    end
+
+    local function axes()
+        local forward = (Speed.held[Enum.KeyCode.W] and 1 or 0)
+            - (Speed.held[Enum.KeyCode.S] and 1 or 0)
+        local side = (Speed.held[Enum.KeyCode.D] and 1 or 0)
+            - (Speed.held[Enum.KeyCode.A] and 1 or 0)
+        if forward == 0 and side == 0 then
+            return nil
+        end
+        return forward, side
+    end
+
+    UserInputService.InputBegan:Connect(function(input, processed)
+        Speed.held[input.KeyCode] = true
+        if processed then
+            return
+        end
+        if not fget("cspeed_enabled", false) then
+            return
+        end
+        if not matches(input, fget("cspeed_key", Enum.KeyCode.LeftAlt)) then
+            return
+        end
+        if fget("cspeed_hold", false) then
+            Speed.active = true
+        else
+            Speed.active = not Speed.active
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        Speed.held[input.KeyCode] = nil
+        if fget("cspeed_hold", false) then
+            if matches(input, fget("cspeed_key", Enum.KeyCode.LeftAlt)) then
+                Speed.active = false
+            end
+        end
+    end)
+
+    function Speed.step(dt)
+        if not fget("cspeed_enabled", false) then
+            Speed.active = false
+            return
+        end
+        if not Speed.active then
+            return
+        end
+
+        local my_root = root()
+        if not my_root then
+            return
+        end
+
+        local forward, side = axes()
+        if not forward then
+            return
+        end
+
+        -- flat basis: any Y in the look vector would make looking up climb
+        local look = my_root.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude < 1e-3 then
+            return
+        end
+        flat = flat.Unit
+
+        local right = Vector3.new(-flat.Z, 0, flat.X)
+        local move = flat * forward + right * side
+        if move.Magnitude < 1e-3 then
+            return
+        end
+
+        -- a hitch hands you a 0.3s frame; without the clamp that is a teleport
+        local step = math.min(dt, 1 / 20)
+        my_root.CFrame = my_root.CFrame + move.Unit * (fget("cspeed_value", 60) * step)
+    end
+
+    function Speed.release()
+        Speed.active = false
+        Speed.held = {}
+    end
+
+    getgenv().TeaSpeed = Speed
+end
+
 -- ------------------------------------------------------------------- world ---
 -- Three independent axes: palette (colour family), sliders (numbers), weather
 -- (particles). Nothing here reads another axis, so snow on a red sky, or a
@@ -1914,6 +2029,7 @@ getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
     Orbit.step(dt)
+    Speed.step(dt)
     World.step()
     Avatar.step()
     Walkspeed.step()
@@ -1934,6 +2050,9 @@ getgenv().TeaUnload = function()
     end
     if getgenv().TeaWorld then
         pcall(getgenv().TeaWorld.release)
+    end
+    if getgenv().TeaSpeed then
+        pcall(getgenv().TeaSpeed.release)
     end
     getgenv().is_firing = false
 
