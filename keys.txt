@@ -1,0 +1,9 @@
+# tea.cc access keys
+# one key per line, case sensitive, lines starting with # are ignored
+# to revoke: delete the line and commit
+
+TEA-7F3A-9C21
+TEA-1B4D-6E88
+TEA-2C9F-4A13
+TEA-9E6B-3D07
+TEA-5A1C-8B42
