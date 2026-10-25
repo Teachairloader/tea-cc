@@ -9,6 +9,9 @@
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
       - loader folder tea.cc -> drift
+      - adds a silent aim section under aimbot: wraps GunHandler.getAim so
+        the aim vector is produced server-side of the camera, flag-gated,
+        with the original function preserved for every off-path
 
     The window size and the header image live inside the juju source that
     tea.cc fetches, so they are patched at the one point where that source is
@@ -119,6 +122,9 @@ if not okFetch or type(source) ~= "string" or #source < 1000 then
     return warn("[drift] could not fetch tea.cc: " .. tostring(source))
 end
 
+-- upstream ships CRLF; every anchor below is written with plain newlines
+source = source:gsub("\r\n", "\n")
+
 -- ------------------------------------------------------------ tea.cc edits --
 local EDITS = {
     { 'local FOLDER = "tea.cc"', 'local FOLDER = "drift"' },
@@ -146,6 +152,192 @@ local EDITS = {
 for _, edit in ipairs(EDITS) do
     source = lit(source, edit[1], edit[2])
 end
+
+-- ------------------------------------------------------- silent aim (menu) ---
+-- Slotted into combat column 1 directly under aimbot, reusing the cursor that
+-- block call left behind. The anchor is the reset to 0 that starts column 2.
+local SILENT_MENU = [==[
+y = block(main, "combat", 1, y, "silent aim", {
+    { k = "toggle", n = "enabled", f = "silent_enabled", d = false },
+    { k = "dropdown", n = "activation", f = "silent_activation", o = { "Toggle", "Hold" }, d = { "Toggle" }, req = true },
+    { k = "keybind", n = "aim key", f = "silent_key", d = Enum.KeyCode.E },
+    { k = "dropdown", n = "hit part", f = "silent_part", o = { "Head", "Torso", "HumanoidRootPart", "Closest Part" }, d = { "Head" }, req = true },
+    { k = "slider", n = "fov size", f = "silent_fov", min = 0, max = 1000, d = 250 },
+    { k = "toggle", n = "wall check", f = "silent_wall_check", d = false },
+    { k = "toggle", n = "team check", f = "silent_team_check", d = true },
+})
+
+]==]
+
+source = lit(
+    source,
+    'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {',
+    SILENT_MENU .. 'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {'
+)
+
+-- --------------------------------------------------- silent aim (runtime) ---
+-- Appended before the finish marker, not after `return menu`, so it stays live.
+-- Uses the loader's own locals: fget, first, key_of, key_down, flags, Client,
+-- Players, Workspace, UserInputService.
+local SILENT_RUNTIME = [==[
+-- ================================================================ silent aim ===
+-- Replaces GunHandler.getAim so the server receives an aim vector that never
+-- had to pass through the camera. The original is kept verbatim and called
+-- whenever the feature is off or has no target, so offline behaviour is stock.
+do
+    local okModule, handler = pcall(function()
+        local modules = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 15)
+        return require(modules:WaitForChild("GunHandler", 15))
+    end)
+
+    if not okModule or type(handler) ~= "table" or type(handler.getAim) ~= "function" then
+        warn("[drift] GunHandler.getAim not found - silent aim stays inert")
+    else
+        -- A reload must not chain hooks: remember the untouched function per
+        -- handler instance and always wrap that one.
+        if getgenv().__drift_silent_handler ~= handler then
+            getgenv().__drift_silent_original = handler.getAim
+            getgenv().__drift_silent_handler = handler
+        end
+
+        local original = getgenv().__drift_silent_original
+        local mouse = Client:GetMouse()
+        local toggled = true
+        local PART_ORDER = { "Head", "UpperTorso", "Torso", "HumanoidRootPart" }
+
+        UserInputService.InputBegan:Connect(function(input, processed)
+            if processed or not fget("silent_enabled", false) then
+                return
+            end
+            if first(fget("silent_activation", { "Toggle" }), "Toggle") ~= "Toggle" then
+                return
+            end
+            if input.KeyCode == key_of(fget("silent_key", Enum.KeyCode.E)) then
+                toggled = not toggled
+            end
+        end)
+
+        local function active()
+            if not fget("silent_enabled", false) then
+                return false
+            end
+            if first(fget("silent_activation", { "Toggle" }), "Toggle") == "Toggle" then
+                return toggled
+            end
+            return key_down(fget("silent_key", Enum.KeyCode.E))
+        end
+
+        local function pick_part(character)
+            local mode = first(fget("silent_part", { "Head" }), "Head")
+
+            if mode == "Closest Part" then
+                local origin = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position
+                local best, bestDistance = nil, math.huge
+                for _, name in ipairs(PART_ORDER) do
+                    local part = character:FindFirstChild(name)
+                    if part and part:IsA("BasePart") and origin then
+                        local distance = (part.Position - origin).Magnitude
+                        if distance < bestDistance then
+                            best, bestDistance = part, distance
+                        end
+                    end
+                end
+                if best then
+                    return best
+                end
+            else
+                local part = character:FindFirstChild(mode)
+                if part and part:IsA("BasePart") then
+                    return part
+                end
+            end
+
+            local head = character:FindFirstChild("Head")
+            if head and head:IsA("BasePart") then
+                return head
+            end
+            local root = character:FindFirstChild("HumanoidRootPart")
+            if root and root:IsA("BasePart") then
+                return root
+            end
+            return nil
+        end
+
+        local function blocked(origin, part)
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { Client.Character, part.Parent }
+            params.IgnoreWater = true
+            return Workspace:Raycast(origin, part.Position - origin, params) ~= nil
+        end
+
+        local function closest()
+            local camera = Workspace.CurrentCamera
+            if not camera then
+                return nil
+            end
+
+            local cursor = Vector2.new(mouse.X, mouse.Y)
+            local radius = fget("silent_fov", 250)
+            local wall = fget("silent_wall_check", false)
+            local team = fget("silent_team_check", true)
+            local origin = camera.CFrame.Position
+            local best, bestDistance = nil, math.huge
+
+            for _, player in ipairs(Players:GetPlayers()) do
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+                if player ~= Client and humanoid and humanoid.Health > 0 then
+                    local sameTeam = team and Client.Team ~= nil and player.Team == Client.Team
+                    if not sameTeam then
+                        local part = pick_part(character)
+                        if part then
+                            local screen, onScreen = camera:WorldToScreenPoint(part.Position)
+                            if onScreen then
+                                local distance = (Vector2.new(screen.X, screen.Y) - cursor).Magnitude
+                                if distance <= radius
+                                    and distance < bestDistance
+                                    and not (wall and blocked(origin, part))
+                                then
+                                    best, bestDistance = part, distance
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            return best
+        end
+
+        handler.getAim = function(origin, maxDistance)
+            if not active() then
+                return original(origin, maxDistance)
+            end
+
+            local target = closest()
+            local from = origin or (Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.Position)
+
+            if target and from then
+                local delta = target.Position - from
+                if delta.Magnitude > 0.001 then
+                    return delta.Unit, math.min(delta.Magnitude, maxDistance or 200)
+                end
+            end
+
+            return original(origin, maxDistance)
+        end
+    end
+end
+
+]==]
+
+source = lit(
+    source,
+    "-- ----------------------------------------------------------------- finish ---",
+    SILENT_RUNTIME .. "-- ----------------------------------------------------------------- finish ---"
+)
 
 -- --------------------------------------------------------- juju ui edits ---
 -- Runs inside the tea.cc chunk, where `source` already holds the juju ui.
@@ -175,6 +367,7 @@ if type(source) == "string" then
     source = lit_(source, "450", "552")
     source = lit_(source, "405", "507")
     source = lit_(source, "udim2_new(0, 35, 0, 35)", "udim2_new(0, 40, 0, 40)")
+    source = lit_(source, "\r\n", "\n")
 
     -- header text: the stock offsets (x +5, y +3 / +19) sit on the top edge of
     -- a 35px mark; the 40px mark needs the label optically centred instead.
