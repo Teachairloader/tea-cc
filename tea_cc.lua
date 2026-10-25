@@ -1400,6 +1400,367 @@ do
     getgenv().TeaOrbit = Orbit
 end
 
+-- ------------------------------------------------------------------- world ---
+-- Three independent axes: palette (colour family), sliders (numbers), weather
+-- (particles). Nothing here reads another axis, so snow on a red sky, or a
+-- night sky with lightning over rain, both fall out for free. Writes go
+-- through pcall because Lighting's property set varies between clients.
+local World = { kind = "None", last = 0, rigs = {}, flash_at = 0, atmo_owned = false }
+
+do
+    local Lighting = game:GetService("Lighting")
+    local WHITE = Color3.fromRGB(255, 255, 255)
+    local TEXTURE = "rbxassetid://1316045217"
+
+    local LIGHT_KEYS = {
+        "Ambient", "OutdoorAmbient", "Brightness", "ClockTime",
+        "ColorShift_Top", "ColorShift_Bottom", "FogColor", "FogEnd",
+        "FogStart", "ExposureCompensation",
+    }
+
+    local snap = {}
+    for _, key in ipairs(LIGHT_KEYS) do
+        local ok, value = pcall(function()
+            return Lighting[key]
+        end)
+        if ok then
+            snap[key] = value
+        end
+    end
+
+    local game_atmo = Lighting:FindFirstChildOfClass("Atmosphere")
+    local atmo_snap = nil
+    if game_atmo then
+        atmo_snap = {
+            Density = game_atmo.Density, Offset = game_atmo.Offset,
+            Color = game_atmo.Color, Decay = game_atmo.Decay,
+            Glare = game_atmo.Glare, Haze = game_atmo.Haze,
+        }
+    end
+
+    local function write(object, property, value)
+        pcall(function()
+            object[property] = value
+        end)
+    end
+
+    -- white picker leaves the palette alone; anything else multiplies it
+    local function tint(colour, picker)
+        return Color3.new(colour.R * picker.R, colour.G * picker.G, colour.B * picker.B)
+    end
+
+    local PALETTES = {
+        ["Off"] = { keep = true },
+        ["Red"] = {
+            ambient = Color3.fromRGB(120, 26, 26),
+            outdoor = Color3.fromRGB(190, 60, 50),
+            top = Color3.fromRGB(255, 96, 84),
+            bottom = Color3.fromRGB(120, 22, 22),
+            fog = Color3.fromRGB(160, 40, 36),
+            atmo = { Density = 0.34, Offset = 0, Decay = Color3.fromRGB(80, 14, 14), Glare = 2, Haze = 3 },
+        },
+        ["Night"] = {
+            ambient = Color3.fromRGB(18, 22, 44),
+            outdoor = Color3.fromRGB(26, 32, 60),
+            top = Color3.fromRGB(20, 28, 70),
+            bottom = Color3.fromRGB(6, 6, 14),
+            fog = Color3.fromRGB(10, 14, 30),
+            atmo = { Density = 0.42, Offset = -0.2, Decay = Color3.fromRGB(8, 10, 26), Glare = 0, Haze = 1.4 },
+        },
+        ["Overcast"] = {
+            ambient = Color3.fromRGB(96, 102, 112),
+            outdoor = Color3.fromRGB(128, 134, 144),
+            top = Color3.fromRGB(170, 178, 190),
+            bottom = Color3.fromRGB(120, 126, 136),
+            fog = Color3.fromRGB(150, 158, 170),
+            atmo = { Density = 0.46, Offset = 0, Decay = Color3.fromRGB(120, 126, 136), Glare = 0, Haze = 5.5 },
+        },
+        ["Storm"] = {
+            ambient = Color3.fromRGB(46, 52, 64),
+            outdoor = Color3.fromRGB(60, 66, 78),
+            top = Color3.fromRGB(78, 88, 104),
+            bottom = Color3.fromRGB(38, 42, 52),
+            fog = Color3.fromRGB(64, 70, 82),
+            atmo = { Density = 0.52, Offset = 0, Decay = Color3.fromRGB(40, 44, 54), Glare = 0, Haze = 7 },
+        },
+        ["Dusk"] = {
+            ambient = Color3.fromRGB(62, 40, 46),
+            outdoor = Color3.fromRGB(120, 78, 70),
+            top = Color3.fromRGB(255, 138, 92),
+            bottom = Color3.fromRGB(96, 44, 62),
+            fog = Color3.fromRGB(180, 108, 92),
+            atmo = { Density = 0.30, Offset = 0.1, Decay = Color3.fromRGB(90, 40, 60), Glare = 1.5, Haze = 2.2 },
+        },
+        ["Void"] = {
+            ambient = Color3.fromRGB(0, 0, 0),
+            outdoor = Color3.fromRGB(0, 0, 0),
+            top = Color3.fromRGB(0, 0, 0),
+            bottom = Color3.fromRGB(0, 0, 0),
+            fog = Color3.fromRGB(0, 0, 0),
+            atmo = { Density = 0.6, Offset = 0, Decay = Color3.fromRGB(0, 0, 0), Glare = 0, Haze = 0 },
+        },
+    }
+
+    local WEATHER = {
+        Snow = {
+            gravity = -3,
+            layers = {
+                -- far: small, dim, slow, long-lived - the depth layer
+                { rate = 220, size = 0.20, speed = NumberRange.new(4, 8), transparency = 0.62,
+                  lifetime = NumberRange.new(18, 26), height = 36, spread = Vector2.new(70, 70), rot = NumberRange.new(-30, 30) },
+                -- mid: the readable body of the fall
+                { rate = 340, size = 0.34, speed = NumberRange.new(7, 12), transparency = 0.34,
+                  lifetime = NumberRange.new(12, 18), height = 27, spread = Vector2.new(50, 50), rot = NumberRange.new(-60, 60) },
+                -- near: big, fast, barely transparent - reads as flakes passing the face
+                { rate = 150, size = 0.58, speed = NumberRange.new(11, 17), transparency = 0.12,
+                  lifetime = NumberRange.new(8, 13), height = 18, spread = Vector2.new(38, 38), rot = NumberRange.new(-90, 90) },
+            },
+        },
+        Rain = {
+            gravity = -95,
+            layers = {
+                { rate = 820, size = 0.55, speed = NumberRange.new(120, 165), transparency = 0.32,
+                  lifetime = NumberRange.new(1.1, 1.7), height = 28, spread = Vector2.new(7, 7), squash = 0.05 },
+                { rate = 460, size = 0.34, speed = NumberRange.new(155, 205), transparency = 0.55,
+                  lifetime = NumberRange.new(0.8, 1.2), height = 32, spread = Vector2.new(5, 5), squash = 0.04 },
+                -- spray: slow, wide, almost invisible - keeps the air wet between streaks
+                { rate = 130, size = 1.10, speed = NumberRange.new(26, 44), transparency = 0.90,
+                  lifetime = NumberRange.new(1.4, 2.2), height = 14, spread = Vector2.new(45, 45), squash = 1 },
+            },
+        },
+    }
+
+    WEATHER.Storm = WEATHER.Rain
+
+    local follow = nil
+
+    local function clear_rigs()
+        for _, part in ipairs(World.rigs) do
+            pcall(function()
+                part:Destroy()
+            end)
+        end
+        World.rigs = {}
+    end
+
+    local function start_follow()
+        if follow then
+            return
+        end
+        follow = RunService.RenderStepped:Connect(function()
+            local camera = Workspace.CurrentCamera
+            if not camera then
+                return
+            end
+            for _, part in ipairs(World.rigs) do
+                if part.Parent then
+                    part.CFrame = camera.CFrame * CFrame.new(0, part:GetAttribute("Height") or 24, 0)
+                end
+            end
+        end)
+    end
+
+    local function build(kind)
+        clear_rigs()
+        local definition = WEATHER[kind]
+        World.kind = kind
+        if not definition then
+            return
+        end
+
+        for index, layer in ipairs(definition.layers) do
+            local part = Instance.new("Part")
+            part.Name = "TeaWorldRig" .. index
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanQuery = false
+            part.CanTouch = false
+            part.CastShadow = false
+            part.Transparency = 1
+            part.Size = Vector3.new(190, 4, 190)
+            part.Parent = Workspace
+            part:SetAttribute("Height", layer.height)
+
+            local emitter = Instance.new("ParticleEmitter")
+            emitter.Name = "TeaWorldEmitter" .. index
+            emitter.Texture = TEXTURE
+            emitter.Color = ColorSequence.new(WHITE)
+            emitter.Lifetime = layer.lifetime
+            emitter.SpreadAngle = layer.spread
+            emitter.Rotation = layer.rot or NumberRange.new(0, 0)
+            emitter.RotSpeed = NumberRange.new(-35, 35)
+            emitter.Squash = NumberSequence.new(layer.squash or 1)
+            emitter.EmissionDirection = Enum.NormalId.Bottom
+            emitter.LightEmission = 0
+            emitter.LightInfluence = 0
+            emitter.ZOffset = 1
+            emitter.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, layer.transparency),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+
+            pcall(function()
+                emitter.Shape = Enum.ParticleEmitterShape.Box
+                emitter.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+                emitter.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+            end)
+
+            emitter.Parent = part
+            table.insert(World.rigs, part)
+        end
+
+        start_follow()
+    end
+
+    local function tune_weather()
+        local kind = first(fget("world_weather", { "None" }), "None")
+        if kind ~= World.kind then
+            build(WEATHER[kind] and kind or "None")
+        end
+
+        local definition = WEATHER[World.kind]
+        if not definition then
+            return
+        end
+
+        local size = fget("world_weather_size", 1)
+        local speed = fget("world_weather_speed", 100) / 100
+        local density = fget("world_weather_rate", 55) / 55
+        local wind = fget("world_weather_wind", 14)
+        local colour = flags["world_weather_color"] or Color3.fromRGB(235, 244, 255)
+
+        for index, part in ipairs(World.rigs) do
+            local emitter = part:FindFirstChildOfClass("ParticleEmitter")
+            local layer = definition.layers[index]
+            if emitter and layer then
+                write(emitter, "Rate", math.max(layer.rate * density, 0))
+                write(emitter, "Color", ColorSequence.new(colour))
+                write(emitter, "Size", NumberSequence.new(layer.size * size))
+                write(emitter, "Speed", NumberRange.new(layer.speed.Min * speed, layer.speed.Max * speed))
+                write(emitter, "Acceleration", Vector3.new(wind, definition.gravity * speed, wind * 0.35))
+            end
+        end
+    end
+
+    local function apply_lighting()
+        local name = first(fget("world_preset", { "Off" }), "Off")
+        local palette = PALETTES[name] or PALETTES["Off"]
+
+        local pick = {
+            top = flags["world_sky_top"] or WHITE,
+            bottom = flags["world_sky_bottom"] or WHITE,
+            ambient = flags["world_ambient"] or WHITE,
+            fog = flags["world_fog"] or WHITE,
+        }
+
+        write(Lighting, "Brightness", fget("world_brightness", 2))
+        write(Lighting, "ClockTime", fget("world_clock", 14))
+        write(Lighting, "ExposureCompensation", fget("world_exposure", 0))
+
+        if fget("world_fullbright", false) then
+            write(Lighting, "Ambient", WHITE)
+            write(Lighting, "OutdoorAmbient", WHITE)
+        elseif not palette.keep then
+            write(Lighting, "Ambient", tint(palette.ambient, pick.ambient))
+            write(Lighting, "OutdoorAmbient", tint(palette.outdoor, pick.ambient))
+        end
+
+        if fget("world_no_fog", false) then
+            write(Lighting, "FogStart", 100000)
+            write(Lighting, "FogEnd", 100000)
+        else
+            if not palette.keep then
+                write(Lighting, "FogColor", tint(palette.fog, pick.fog))
+                write(Lighting, "FogStart", 0)
+            end
+            write(Lighting, "FogEnd", fget("world_fog_end", 800))
+        end
+
+        if palette.keep then
+            return
+        end
+
+        write(Lighting, "ColorShift_Top", tint(palette.top, pick.top))
+        write(Lighting, "ColorShift_Bottom", tint(palette.bottom, pick.bottom))
+
+        local atmo = game_atmo
+        if not atmo then
+            atmo = Lighting:FindFirstChild("TeaWorldAtmosphere")
+            if not atmo then
+                atmo = Instance.new("Atmosphere")
+                atmo.Name = "TeaWorldAtmosphere"
+                atmo.Parent = Lighting
+                World.atmo_owned = true
+            end
+        end
+
+        write(atmo, "Density", palette.atmo.Density)
+        write(atmo, "Offset", palette.atmo.Offset)
+        write(atmo, "Decay", palette.atmo.Decay)
+        write(atmo, "Glare", palette.atmo.Glare)
+        write(atmo, "Haze", palette.atmo.Haze)
+        write(atmo, "Color", tint(palette.top, pick.top))
+    end
+
+    local function flash_tick()
+        local kind = World.kind
+        if kind ~= "Rain" then
+            return
+        end
+        if not fget("world_lightning", false) and first(fget("world_weather", { "None" }), "None") ~= "Storm" then
+            return
+        end
+
+        local now = os.clock()
+        if now < World.flash_at then
+            return
+        end
+        World.flash_at = now + math.random(4, 10)
+
+        local base = Lighting.Brightness
+        task.spawn(function()
+            write(Lighting, "Brightness", base + 3.5)
+            task.wait(0.05)
+            write(Lighting, "Brightness", base + 1.2)
+            task.wait(0.05)
+            write(Lighting, "Brightness", base)
+        end)
+    end
+
+    function World.step()
+        local now = os.clock()
+        if now - World.last < 0.12 then
+            return
+        end
+        World.last = now
+
+        apply_lighting()
+        tune_weather()
+        flash_tick()
+    end
+
+    function World.release()
+        for key, value in pairs(snap) do
+            write(Lighting, key, value)
+        end
+        if atmo_snap and game_atmo then
+            for key, value in pairs(atmo_snap) do
+                write(game_atmo, key, value)
+            end
+        elseif World.atmo_owned then
+            local atmo = Lighting:FindFirstChild("TeaWorldAtmosphere")
+            if atmo then
+                atmo:Destroy()
+            end
+            World.atmo_owned = false
+        end
+        clear_rigs()
+        World.kind = "None"
+    end
+
+    getgenv().TeaWorld = World
+end
+
 -- --------------------------------------------------------------------- loop ---
 -- RenderStepped, not BindToRenderStep: the default camera module runs inside
 -- the camera-priority step, so a CFrame written there is overwritten before
@@ -1409,6 +1770,7 @@ getgenv().TeaRuntimeConnection = RunService.RenderStepped:Connect(function(dt)
     Aim.step(dt)
     Aim.sweep_hitboxes()
     Orbit.step(dt)
+    World.step()
     Avatar.step()
     Walkspeed.step()
     Crosshair.step()
@@ -1425,6 +1787,9 @@ getgenv().TeaUnload = function()
     pcall(getgenv().TeaHitboxRestore)
     if getgenv().TeaOrbit then
         pcall(getgenv().TeaOrbit.release)
+    end
+    if getgenv().TeaWorld then
+        pcall(getgenv().TeaWorld.release)
     end
     getgenv().is_firing = false
 
