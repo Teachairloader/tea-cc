@@ -287,6 +287,15 @@ source = lit(
     'y = block(main, "combat", 1, y, "camlock", {'
 )
 
+-- camlock ships disarmed. The stock block defaults aim_enabled to true, so the
+-- lock starts pulling the camera the frame the menu loads. Default it off and
+-- leave the toggle to the user.
+source = lit(
+    source,
+    '    { k = "toggle", n = "enabled", f = "aim_enabled", d = true },',
+    '    { k = "toggle", n = "enabled", f = "aim_enabled", d = false },'
+)
+
 source = lit(
     source,
     '    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },\n',
