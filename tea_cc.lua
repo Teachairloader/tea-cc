@@ -23,21 +23,105 @@
     layered emitters (far/mid/near) that follow the camera. Weapon and
     triggerbot sections removed. Camlock ships on one aim key, defaulting to
     right mouse.
+
+    2026-10-25h: juju ui.lua cached to <folder>/ui.lua for six hours, cutting
+    the cold-start fetch. A cached copy that will not compile is dropped and
+    refetched, so a bad write can never wedge the loader.
 ]]
 
 local UI_URL = "https://raw.githubusercontent.com/panduh16/juju/main/ui.lua"
 local FOLDER = "tea.cc"
+local UI_CACHE = FOLDER .. "/ui.lua"
+local UI_TTL = 6 * 60 * 60
+local UI_TAG = "--[[tea.cc cache:"
 
 -- --------------------------------------------------------------- identity ---
 getgenv().script_name = "Tea.cc"
 getgenv().custom_folder = FOLDER
 
 -- ------------------------------------------------------------------ fetch ---
-local okFetch, source = pcall(function()
-    return game:HttpGet(UI_URL)
-end)
-if not okFetch or type(source) ~= "string" or #source < 1000 then
-    return warn("[tea.cc] could not fetch juju: " .. tostring(source))
+-- juju's ui.lua is the single biggest cost in a cold start (~250kb) and it is
+-- the one file we do not pin, so it is cached to disk for six hours. A cached
+-- copy that will not compile is deleted and refetched, so a truncated write
+-- can never wedge the loader.
+local function read_cached_ui()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then
+        return nil
+    end
+    if not isfile(UI_CACHE) then
+        return nil
+    end
+
+    local ok, body = pcall(readfile, UI_CACHE)
+    if not ok or type(body) ~= "string" or #body < 1000 then
+        return nil
+    end
+    if body:sub(1, #UI_TAG) ~= UI_TAG then
+        return nil
+    end
+
+    local close = body:find("]]", #UI_TAG + 1, true)
+    if not close then
+        return nil
+    end
+
+    local stamp = tonumber(body:sub(#UI_TAG + 1, close - 1))
+    if not stamp or os.time() - stamp > UI_TTL then
+        return nil
+    end
+
+    local cached = body:sub(close + 2)
+    if #cached < 1000 then
+        return nil
+    end
+    return cached
+end
+
+local function write_cached_ui(body)
+    if type(writefile) ~= "function" then
+        return
+    end
+    pcall(function()
+        if type(isfolder) == "function" and type(makefolder) == "function"
+            and not isfolder(FOLDER) then
+            makefolder(FOLDER)
+        end
+        writefile(UI_CACHE, UI_TAG .. tostring(os.time()) .. "]]\n" .. body)
+    end)
+end
+
+local function drop_cached_ui()
+    if type(delfile) ~= "function" or type(isfile) ~= "function" then
+        return
+    end
+    if isfile(UI_CACHE) then
+        pcall(delfile, UI_CACHE)
+    end
+end
+
+local function fetch_remote_ui()
+    local ok, body = pcall(function()
+        return game:HttpGet(UI_URL .. "?t=" .. tostring(os.time()))
+    end)
+    if not ok or type(body) ~= "string" or #body < 1000 then
+        return nil, tostring(body)
+    end
+    write_cached_ui(body)
+    return body
+end
+
+local source = read_cached_ui()
+if source and not loadstring(source) then
+    drop_cached_ui()
+    source = nil
+end
+
+local fetch_error
+if not source then
+    source, fetch_error = fetch_remote_ui()
+end
+if not source then
+    return warn("[tea.cc] could not fetch juju: " .. tostring(fetch_error))
 end
 
 -- ---------------------------------------------------------------- recolour ---
@@ -66,7 +150,8 @@ source = swap(source, "color3_fromrgb(30, 51, 61)", "color3_fromrgb(61, 30, 51)"
 -- ---------------------------------------------------------------- compile ---
 local chunk, compileError = loadstring(source)
 if not chunk then
-    return warn("[tea.cc] juju failed to compile: " .. tostring(compileError))
+    drop_cached_ui()
+    return warn("[tea.cc] juju failed to compile (cache cleared): " .. tostring(compileError))
 end
 
 local okRun, juju = pcall(chunk)
