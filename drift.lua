@@ -21,9 +21,11 @@
         enabled runs a one-frame root desync followed by a ping-length
         NetworkIsSleeping choke (velocity restored every pass); toggle resolver
         holds every other player's root at zero vertical velocity
-      - adds an "overlay esp" section on visuals column 2: box, filled/gradient,
-        skeleton, name, distance, tool, health/armor bars, highlight. Body is
-        embedded below and uses Drawing primitives only - no fonts, no
+      - esp: the stock "player esp" block on visuals column 1 had rows but no
+        runtime behind them. That block is now the only esp block - box, box
+        width, name, distance, skeleton, health/armor bars, held tool,
+        highlight, team check, text size, max distance - and every row is read
+        live by the body embedded below. Drawing primitives only: no fonts, no
         getcustomasset, no crypt, no remote fetch
 
     The window size and the header image live inside the juju source that
@@ -167,31 +169,40 @@ for _, edit in ipairs(EDITS) do
 end
 
 -- ----------------------------------------------------------------- esp (menu) ---
--- Lives on visuals column 2, stacked under "world". Combat column 1 already
--- carries aimbot; a third section there overruns the content area.
--- Flags are esp_ov_* so tea.cc's own "player esp" block keeps its names.
-local ESP_MENU = [==[y = block(main, "visuals", 2, y, "overlay esp", {
-    { k = "toggle", n = "enabled", f = "esp_ov_enabled", d = false },
-    { k = "toggle", n = "box", f = "esp_ov_box", d = true },
-    { k = "slider", n = "box width", f = "esp_ov_width", min = 0.1, max = 1, d = 0.28, dec = 2 },
-    { k = "toggle", n = "skeleton", f = "esp_ov_skeleton", d = false },
-    { k = "toggle", n = "name", f = "esp_ov_name", d = true },
-    { k = "toggle", n = "distance", f = "esp_ov_distance", d = true },
-    { k = "toggle", n = "tool", f = "esp_ov_tool", d = false },
-    { k = "toggle", n = "health bar", f = "esp_ov_health", d = true },
-    { k = "toggle", n = "armor bar", f = "esp_ov_armor", d = false },
-    { k = "toggle", n = "highlight", f = "esp_ov_highlight", d = false },
-    { k = "slider", n = "text size", f = "esp_ov_text_size", min = 10, max = 24, d = 14 },
-    { k = "slider", n = "max distance", f = "esp_ov_max_distance", min = 50, max = 2000, d = 500 },
-    { k = "toggle", n = "team check", f = "esp_ov_team", d = true },
+-- One esp section, not two. The stock "player esp" block on visuals column 1
+-- shipped rows with no runtime behind them, so toggling it did nothing; the
+-- overlay section that used to sit on column 2 is now merged into that block
+-- and every row is live. Flags stay on the esp_* names the block already had.
+local ESP_MENU = [==[y = block(main, "visuals", 1, y, "esp", {
+    { k = "toggle", n = "enabled", f = "esp_enabled", d = false },
+    { k = "toggle", n = "box", f = "esp_box", d = true },
+    { k = "slider", n = "box width", f = "esp_width", min = 0.1, max = 1, d = 0.28, dec = 2 },
+    { k = "toggle", n = "name", f = "esp_name", d = true },
+    { k = "toggle", n = "distance", f = "esp_distance", d = true },
+    { k = "toggle", n = "skeleton", f = "esp_skeleton", d = false },
+    { k = "toggle", n = "health bar", f = "esp_health", d = true },
+    { k = "toggle", n = "armor bar", f = "esp_armor", d = false },
+    { k = "toggle", n = "held tool", f = "esp_tool", d = false },
+    { k = "toggle", n = "highlight", f = "esp_highlight", d = false },
+    { k = "toggle", n = "team check", f = "esp_team", d = true },
+    { k = "slider", n = "text size", f = "esp_text_size", min = 10, max = 24, d = 14 },
+    { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 500 },
 })
 
 ]==]
 
 source = lit(
     source,
-    '-- misc -----------------------------------------------------------------',
-    ESP_MENU .. '-- misc -----------------------------------------------------------------'
+    [==[y = block(main, "visuals", 1, y, "player esp", {
+    { k = "toggle", n = "enabled", f = "esp_enabled", d = false },
+    { k = "toggle", n = "box", f = "esp_box", d = true },
+    { k = "toggle", n = "name", f = "esp_name", d = true },
+    { k = "toggle", n = "distance", f = "esp_distance", d = true },
+    { k = "toggle", n = "health bar", f = "esp_health", d = true },
+    { k = "toggle", n = "held tool", f = "esp_tool", d = false },
+    { k = "slider", n = "max distance", f = "esp_max_distance", min = 0, max = 2000, d = 500 },
+})]==],
+    ESP_MENU
 )
 
 -- --------------------------------------------------------------- misc (lock) ---
@@ -372,6 +383,12 @@ local function build_esp()
             if ok and value ~= nil then
                 return value
             end
+            -- fget reads the host's flag table; if that table was rebuilt (theme
+            -- reload, config load) the live copy on getgenv is the authority.
+            local live = getgenv().TeaJujuFlags
+            if type(live) == "table" and live[name] ~= nil then
+                return live[name]
+            end
             return default
         end
         local config = getgenv().drift_esp
@@ -484,11 +501,17 @@ local function build_esp()
     getgenv()[DRAW_KEY] = pool
     getgenv()[GUI_KEY] = guiPool
 
+    local drawFailureWarned = false
+
     local function new(kind)
         local ok, object = pcall(function()
             return Drawing.new(kind)
         end)
         if not ok or object == nil then
+            if not drawFailureWarned then
+                drawFailureWarned = true
+                warn("[drift esp] Drawing.new(" .. tostring(kind) .. ") unavailable - esp cannot draw")
+            end
             return nil
         end
         object.Visible = false
@@ -848,7 +871,9 @@ local function build_esp()
 
     local function render()
         local camera = Workspace.CurrentCamera
-        local enabled = manual and get("esp_ov_enabled", true) and camera ~= nil
+        -- host: the menu owns the toggle. standalone: no menu exists, so it
+        -- defaults on and right shift is the toggle.
+        local enabled = manual and get("esp_enabled", standalone) and camera ~= nil
 
         if not enabled then
             if shown then
@@ -861,18 +886,18 @@ local function build_esp()
         end
         shown = true
 
-        local maxDistance = get("esp_ov_max_distance", 500)
-        local teamCheck = get("esp_ov_team", true)
-        local textSize = get("esp_ov_text_size", 14)
-        local widthScale = get("esp_ov_width", 0.28)
-        local drawBox = get("esp_ov_box", true)
-        local drawName = get("esp_ov_name", true)
-        local drawDistance = get("esp_ov_distance", true)
-        local drawTool = get("esp_ov_tool", false)
-        local drawHealth = get("esp_ov_health", true)
-        local drawArmor = get("esp_ov_armor", false)
-        local drawSkeleton = get("esp_ov_skeleton", false)
-        local drawHighlight = get("esp_ov_highlight", false)
+        local maxDistance = get("esp_max_distance", 500)
+        local teamCheck = get("esp_team", true)
+        local textSize = get("esp_text_size", 14)
+        local widthScale = get("esp_width", 0.28)
+        local drawBox = get("esp_box", true)
+        local drawName = get("esp_name", true)
+        local drawDistance = get("esp_distance", true)
+        local drawTool = get("esp_tool", false)
+        local drawHealth = get("esp_health", true)
+        local drawArmor = get("esp_armor", false)
+        local drawSkeleton = get("esp_skeleton", false)
+        local drawHighlight = get("esp_highlight", false)
 
         local cameraPosition = camera.CFrame.Position
         local viewport = camera.ViewportSize
