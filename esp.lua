@@ -1,6 +1,9 @@
 -- ======================================================================== esp ===
--- Self-contained overlay esp. No fonts, no getcustomasset, no crypt, no remote
--- fetch - Drawing primitives only.
+-- Overlay esp built on the projection math from the reference ESP: the box is
+-- sized off the humanoid root part's screen height instead of Model:GetBoundingBox,
+-- so it works on custom rigs, skinned meshes and games that break GetBoundingBox.
+--
+-- Text and bars are real gui instances in CoreGui; only the box is Drawing.
 --
 -- Runs two ways:
 --   * inside drift/tea.cc, where `fget` exists: every setting comes from the
@@ -10,8 +13,8 @@
 local function build_esp()
     local RunService = game:GetService("RunService")
     local UserInputService = game:GetService("UserInputService")
-    local Workspace = workspace
     local Players = game:GetService("Players")
+    local Workspace = workspace
     local localPlayer = Players.LocalPlayer
 
     if not Drawing then
@@ -25,7 +28,11 @@ local function build_esp()
 
     local function get(name, default)
         if not standalone then
-            return fget(name, default)
+            local ok, value = pcall(fget, name, default)
+            if ok and value ~= nil then
+                return value
+            end
+            return default
         end
         local config = getgenv().drift_esp
         if type(config) == "table" and config[name] ~= nil then
@@ -36,6 +43,35 @@ local function build_esp()
 
     local WHITE = Color3.fromRGB(255, 255, 255)
     local BLACK = Color3.fromRGB(0, 0, 0)
+
+    -- CoreGui keeps the labels out of the game's own gui tree; PlayerGui is the
+    -- fallback for executors that protect CoreGui.
+    local guiParent = nil
+    do
+        local ok, core = pcall(function()
+            return game:GetService("CoreGui")
+        end)
+        if ok and core then
+            guiParent = core
+        end
+        if not guiParent then
+            local ok2, playerGui = pcall(function()
+                return localPlayer:FindFirstChildOfClass("PlayerGui")
+            end)
+            if ok2 then
+                guiParent = playerGui
+            end
+        end
+    end
+    if not guiParent then
+        warn("[drift esp] no gui parent available - overlay esp stays off")
+        return
+    end
+
+    local guiInset = Vector2.new(0, 0)
+    pcall(function()
+        guiInset = game:GetService("GuiService"):GetGuiInset()
+    end)
 
     local R15_BONES = {
         { "Head", "UpperTorso" },
@@ -62,8 +98,9 @@ local function build_esp()
         { "Torso", "Right Leg" },
     }
 
-    -- drawings outlive a reload; tear the previous pass down before re-creating
+    -- everything this build owns, so a reload can tear the previous pass down
     local DRAW_KEY = "__drift_esp_draw"
+    local GUI_KEY = "__drift_esp_gui"
     local stale = getgenv()[DRAW_KEY]
     if type(stale) == "table" then
         for _, object in ipairs(stale) do
@@ -72,9 +109,19 @@ local function build_esp()
             end)
         end
     end
+    local staleGui = getgenv()[GUI_KEY]
+    if type(staleGui) == "table" then
+        for _, object in ipairs(staleGui) do
+            pcall(function()
+                object:Destroy()
+            end)
+        end
+    end
 
     local pool = {}
+    local guiPool = {}
     getgenv()[DRAW_KEY] = pool
+    getgenv()[GUI_KEY] = guiPool
 
     local function new(kind)
         local ok, object = pcall(function()
@@ -84,33 +131,44 @@ local function build_esp()
             return nil
         end
         object.Visible = false
-        object.ZIndex = 2
         pool[#pool + 1] = object
         return object
     end
 
-    local function text()
-        local object = new("Text")
-        if object then
-            pcall(function()
-                object.Font = 2
-                object.Center = true
-                object.Outline = true
-                object.OutlineColor = BLACK
-                object.Color = WHITE
-                object.Transparency = 1
-            end)
+    local function label(size)
+        local ok, object = pcall(function()
+            local textLabel = Instance.new("TextLabel")
+            textLabel.BackgroundTransparency = 1
+            textLabel.BorderSizePixel = 0
+            textLabel.TextColor3 = WHITE
+            textLabel.TextStrokeColor3 = BLACK
+            textLabel.TextStrokeTransparency = 0
+            textLabel.TextScaled = false
+            textLabel.RichText = false
+            textLabel.TextSize = size
+            textLabel.Font = Enum.Font.Code
+            textLabel.TextXAlignment = Enum.TextXAlignment.Center
+            textLabel.Size = UDim2.new(0, 220, 0, size + 4)
+            textLabel.Visible = false
+            return textLabel
+        end)
+        if not ok or object == nil then
+            return nil
         end
         return object
     end
 
-    local function bar()
-        local object = new("Square")
-        if object then
-            pcall(function()
-                object.Filled = true
-                object.Thickness = 0
-            end)
+    local function frame()
+        local ok, object = pcall(function()
+            local guiFrame = Instance.new("Frame")
+            guiFrame.BackgroundColor3 = BLACK
+            guiFrame.BorderSizePixel = 0
+            guiFrame.BackgroundTransparency = 0.2
+            guiFrame.Visible = false
+            return guiFrame
+        end)
+        if not ok or object == nil then
+            return nil
         end
         return object
     end
@@ -125,45 +183,77 @@ local function build_esp()
 
         entry = {
             box = new("Square"),
-            fill = new("Square"),
-            shade = new("Square"),
-            label = text(),
-            distance = text(),
-            tool = text(),
-            healthBack = bar(),
-            healthFill = bar(),
-            armorBack = bar(),
-            armorFill = bar(),
+            outline = new("Square"),
             bones = {},
             highlight = nil,
+            lastHealth = nil,
+            lastArmor = nil,
             drawn = false,
         }
 
         if entry.box then
             pcall(function()
                 entry.box.Filled = false
-                entry.box.Thickness = 1
+                entry.box.Thickness = 2
                 entry.box.Color = WHITE
-                entry.box.Transparency = 0.9
             end)
         end
 
-        if entry.fill then
+        if entry.outline then
             pcall(function()
-                entry.fill.Filled = true
-                entry.fill.Thickness = 0
-                entry.fill.Color = WHITE
-                entry.fill.Transparency = 0.88
+                entry.outline.Filled = false
+                entry.outline.Thickness = 1
+                entry.outline.Color = BLACK
             end)
         end
 
-        if entry.shade then
-            pcall(function()
-                entry.shade.Filled = true
-                entry.shade.Thickness = 0
-                entry.shade.Color = BLACK
-                entry.shade.Transparency = 0.55
-            end)
+        local okGui, gui = pcall(function()
+            local screen = Instance.new("ScreenGui")
+            screen.Name = "drift_esp_" .. player.Name
+            screen.IgnoreGuiInset = true
+            screen.ResetOnSpawn = false
+            screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            screen.DisplayOrder = 9999
+            screen.Parent = guiParent
+            return screen
+        end)
+
+        if okGui and gui then
+            guiPool[#guiPool + 1] = gui
+            entry.gui = gui
+
+            entry.name = label(14)
+            entry.studs = label(14)
+            entry.tool = label(14)
+
+            for _, key in ipairs({ "name", "studs", "tool" }) do
+                local object = entry[key]
+                if object then
+                    object.Parent = gui
+                end
+            end
+
+            entry.healthOutline = frame()
+            entry.healthFill = frame()
+            entry.armorOutline = frame()
+            entry.armorFill = frame()
+
+            if entry.healthOutline then
+                entry.healthOutline.Parent = gui
+            end
+            if entry.healthFill then
+                entry.healthFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                entry.healthFill.BackgroundTransparency = 0
+                entry.healthFill.Parent = entry.healthOutline or gui
+            end
+            if entry.armorOutline then
+                entry.armorOutline.Parent = gui
+            end
+            if entry.armorFill then
+                entry.armorFill.BackgroundColor3 = Color3.fromRGB(120, 180, 255)
+                entry.armorFill.BackgroundTransparency = 0
+                entry.armorFill.Parent = entry.armorOutline or gui
+            end
         end
 
         cache[player] = entry
@@ -176,8 +266,15 @@ local function build_esp()
         end
         entry.drawn = false
 
-        for _, key in ipairs({ "box", "fill", "shade", "label", "distance", "tool",
-            "healthBack", "healthFill", "armorBack", "armorFill" }) do
+        if entry.box then
+            entry.box.Visible = false
+        end
+        if entry.outline then
+            entry.outline.Visible = false
+        end
+
+        for _, key in ipairs({ "name", "studs", "tool", "healthOutline", "healthFill",
+            "armorOutline", "armorFill" }) do
             local object = entry[key]
             if object then
                 object.Visible = false
@@ -193,14 +290,16 @@ local function build_esp()
 
     local function destroy(entry)
         hide(entry)
-        for _, key in ipairs({ "box", "fill", "shade", "label", "distance", "tool",
-            "healthBack", "healthFill", "armorBack", "armorFill" }) do
-            local object = entry[key]
-            if object then
-                pcall(function()
-                    object:Remove()
-                end)
-            end
+
+        if entry.box then
+            pcall(function()
+                entry.box:Remove()
+            end)
+        end
+        if entry.outline then
+            pcall(function()
+                entry.outline:Remove()
+            end)
         end
         for _, line in ipairs(entry.bones) do
             if line then
@@ -214,6 +313,12 @@ local function build_esp()
                 entry.highlight:Destroy()
             end)
             entry.highlight = nil
+        end
+        if entry.gui then
+            pcall(function()
+                entry.gui:Destroy()
+            end)
+            entry.gui = nil
         end
     end
 
@@ -281,6 +386,34 @@ local function build_esp()
         end
     end
 
+    -- games that ship an armor stat expose it either as a BodyEffects value
+    -- (da hood style) or as an attribute; both are checked
+    local function read_armor(character, humanoid)
+        local bodyEffects = character:FindFirstChild("BodyEffects")
+        local armorValue = bodyEffects and bodyEffects:FindFirstChild("Armor")
+        if armorValue and typeof(armorValue) == "Instance" and armorValue:IsA("ValueBase") then
+            local maximum = bodyEffects:FindFirstChild("MaxArmor")
+            local maxValue = 130
+            if maximum and typeof(maximum) == "Instance" and maximum:IsA("ValueBase") then
+                maxValue = tonumber(maximum.Value) or maxValue
+            end
+            local current = tonumber(armorValue.Value)
+            if current then
+                return math.max(0, math.min(1, current / math.max(maxValue, 1)))
+            end
+        end
+
+        local attribute = character:GetAttribute("Armor") or humanoid:GetAttribute("Armor")
+        if type(attribute) == "number" then
+            local maxAttribute = character:GetAttribute("MaxArmor")
+                or humanoid:GetAttribute("MaxArmor")
+                or 100
+            return math.max(0, math.min(1, attribute / math.max(maxAttribute, 1)))
+        end
+
+        return 0
+    end
+
     Players.PlayerRemoving:Connect(function(player)
         local entry = cache[player]
         if entry then
@@ -303,7 +436,7 @@ local function build_esp()
 
     local shown = false
 
-    RunService.RenderStepped:Connect(function()
+    local function render()
         local camera = Workspace.CurrentCamera
         local enabled = manual and get("esp_ov_enabled", true) and camera ~= nil
 
@@ -321,9 +454,8 @@ local function build_esp()
         local maxDistance = get("esp_ov_max_distance", 500)
         local teamCheck = get("esp_ov_team", true)
         local textSize = get("esp_ov_text_size", 14)
+        local widthScale = get("esp_ov_width", 0.28)
         local drawBox = get("esp_ov_box", true)
-        local drawFill = get("esp_ov_filled", false)
-        local drawGradient = get("esp_ov_gradient", true)
         local drawName = get("esp_ov_name", true)
         local drawDistance = get("esp_ov_distance", true)
         local drawTool = get("esp_ov_tool", false)
@@ -332,16 +464,20 @@ local function build_esp()
         local drawSkeleton = get("esp_ov_skeleton", false)
         local drawHighlight = get("esp_ov_highlight", false)
 
-        local widthScale = get("esp_ov_width", 0.28)
-        local cameraPos = camera.CFrame.Position
+        local cameraPosition = camera.CFrame.Position
+        local viewport = camera.ViewportSize
 
         for _, player in ipairs(Players:GetPlayers()) do
             local character = player.Character
-            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local humanoid = character and character:FindFirstChildWhichIsA("Humanoid")
             local root = character and character:FindFirstChild("HumanoidRootPart")
 
-            local sameTeam = teamCheck and localPlayer.Team ~= nil and player.Team == localPlayer.Team
+            local sameTeam = teamCheck
+                and localPlayer.Team ~= nil
+                and player.Team == localPlayer.Team
+
             local alive = player ~= localPlayer
+                and character ~= nil
                 and humanoid ~= nil
                 and humanoid.Health > 0
                 and root ~= nil
@@ -349,7 +485,7 @@ local function build_esp()
 
             local distance = 0
             if alive then
-                distance = (root.Position - cameraPos).Magnitude
+                distance = (root.Position - cameraPosition).Magnitude
                 if distance > maxDistance then
                     alive = false
                 end
@@ -363,166 +499,153 @@ local function build_esp()
                     set_highlight(entry, character, false)
                 end
             else
-                entry = ensure(player)
+                local screenPoint, onScreen = camera:WorldToViewportPoint(root.Position)
 
-                -- eight corners of the character's bounding box, projected; any
-                -- corner behind the camera is dropped rather than clamped
-                local okBox, boxCFrame, boxSize = pcall(function()
-                    return character:GetBoundingBox()
-                end)
+                -- box height is derived from the root part's own screen height:
+                -- one stud below and three studs above the root, halved. That
+                -- gives a stable box on any rig, including custom ones where
+                -- GetBoundingBox returns garbage or errors outright.
+                local lowerY = camera:WorldToViewportPoint(
+                    root.Position - Vector3.new(0, 1, 0)
+                ).Y
+                local upperY = camera:WorldToViewportPoint(
+                    root.Position + Vector3.new(0, 3, 0)
+                ).Y
+                local charSize = (lowerY - upperY) / 2
 
-                local minX, minY = math.huge, math.huge
-                local maxX, maxY = -math.huge, -math.huge
-                local corners = 0
-
-                if okBox and boxCFrame then
-                    for xi = -1, 1, 2 do
-                        for yi = -1, 1, 2 do
-                            for zi = -1, 1, 2 do
-                                local world = boxCFrame * Vector3.new(
-                                    xi * boxSize.X * 0.5,
-                                    yi * boxSize.Y * 0.5,
-                                    zi * boxSize.Z * 0.5
-                                )
-                                local point = camera:WorldToViewportPoint(world)
-                                if point.Z > 0 then
-                                    corners = corners + 1
-                                    minX = math.min(minX, point.X)
-                                    maxX = math.max(maxX, point.X)
-                                    minY = math.min(minY, point.Y)
-                                    maxY = math.max(maxY, point.Y)
-                                end
-                            end
-                        end
-                    end
-                end
-
-                local height = maxY - minY
-
-                -- the bounding box width follows the arms, so the box breathes
-                -- every time the character raises a gun; the width is clamped to
-                -- a fraction of the height and re-centred on the box instead
-                local width = math.min(maxX - minX, height * widthScale)
-                local centerX = (minX + maxX) * 0.5
-                minX = centerX - width * 0.5
-                maxX = centerX + width * 0.5
-
-                local visible = corners > 0
-                    and width > 2
-                    and height > 4
-                    and maxX > 0
-                    and maxY > 0
-                    and minX < camera.ViewportSize.X
-                    and minY < camera.ViewportSize.Y
+                local visible = onScreen
+                    and charSize > 1
+                    and screenPoint.X > -64
+                    and screenPoint.Y > -64
+                    and screenPoint.X < viewport.X + 64
+                    and screenPoint.Y < viewport.Y + 64
 
                 if not visible then
-                    hide(entry)
-                    set_highlight(entry, character, false)
+                    if entry then
+                        hide(entry)
+                        set_highlight(entry, character, false)
+                    end
                 else
+                    entry = ensure(player)
                     entry.drawn = true
 
-                    if drawFill and entry.fill then
-                        entry.fill.Position = Vector2.new(minX, minY)
-                        entry.fill.Size = Vector2.new(width, height)
-                        entry.fill.Visible = true
-                    elseif entry.fill then
-                        entry.fill.Visible = false
+                    local boxHeight = math.floor(charSize * 3.2)
+                    local boxWidth = math.floor(charSize * 1.5)
+                    if boxWidth > boxHeight * widthScale then
+                        boxWidth = math.floor(boxHeight * widthScale)
+                    end
+                    if boxWidth < 2 then
+                        boxWidth = 2
+                    end
+                    if boxHeight < 4 then
+                        boxHeight = 4
                     end
 
-                    if drawFill and drawGradient and entry.shade then
-                        entry.shade.Position = Vector2.new(minX, minY + height * 0.45)
-                        entry.shade.Size = Vector2.new(width, height * 0.55)
-                        entry.shade.Visible = true
-                    elseif entry.shade then
-                        entry.shade.Visible = false
-                    end
+                    local boxX = math.floor(screenPoint.X - boxWidth * 0.5)
+                    local boxY = math.floor(screenPoint.Y - boxHeight * 0.47)
 
                     if drawBox and entry.box then
-                        entry.box.Position = Vector2.new(minX, minY)
-                        entry.box.Size = Vector2.new(width, height)
+                        entry.box.Position = Vector2.new(boxX, boxY)
+                        entry.box.Size = Vector2.new(boxWidth, boxHeight)
                         entry.box.Visible = true
                     elseif entry.box then
                         entry.box.Visible = false
                     end
 
-                    if drawName and entry.label then
-                        entry.label.Text = player.DisplayName
-                        entry.label.Size = textSize
-                        entry.label.Position = Vector2.new(centerX, minY - textSize - 2)
-                        entry.label.Visible = true
-                    elseif entry.label then
-                        entry.label.Visible = false
+                    if drawBox and entry.outline then
+                        entry.outline.Position = Vector2.new(boxX - 1, boxY - 1)
+                        entry.outline.Size = Vector2.new(boxWidth + 2, boxHeight + 2)
+                        entry.outline.Visible = true
+                    elseif entry.outline then
+                        entry.outline.Visible = false
                     end
 
-                    if drawDistance and entry.distance then
-                        entry.distance.Text = string.format("%d studs", math.floor(distance + 0.5))
-                        entry.distance.Size = textSize
-                        entry.distance.Position = Vector2.new(centerX, maxY + 2)
-                        entry.distance.Visible = true
-                    elseif entry.distance then
-                        entry.distance.Visible = false
+                    local centerX = boxX + boxWidth * 0.5
+                    local guiY = boxY - guiInset.Y
+
+                    if drawName and entry.name then
+                        entry.name.TextSize = textSize
+                        entry.name.Size = UDim2.new(0, 220, 0, textSize + 4)
+                        entry.name.Text = player.Name
+                        entry.name.Position = UDim2.new(0, centerX - 110, 0, guiY - textSize - 6)
+                        entry.name.Visible = true
+                    elseif entry.name then
+                        entry.name.Visible = false
+                    end
+
+                    if drawDistance and entry.studs then
+                        entry.studs.TextSize = textSize
+                        entry.studs.Size = UDim2.new(0, 220, 0, textSize + 4)
+                        entry.studs.Text = string.format("[%.0fm]", distance * 0.28)
+                        entry.studs.Position = UDim2.new(0, centerX - 110, 0, guiY + boxHeight + 3)
+                        entry.studs.Visible = true
+                    elseif entry.studs then
+                        entry.studs.Visible = false
                     end
 
                     if drawTool and entry.tool then
                         local held = character:FindFirstChildOfClass("Tool")
-                        entry.tool.Text = held and held.Name or ""
-                        entry.tool.Size = textSize
-                        entry.tool.Position = Vector2.new(centerX, maxY + textSize + 4)
-                        entry.tool.Visible = held ~= nil
+                        entry.tool.TextSize = textSize
+                        entry.tool.Size = UDim2.new(0, 220, 0, textSize + 4)
+                        entry.tool.Text = held and held.Name or "none"
+                        entry.tool.Position = UDim2.new(0, centerX - 110, 0, guiY + boxHeight + textSize + 5)
+                        entry.tool.Visible = true
                     elseif entry.tool then
                         entry.tool.Visible = false
                     end
 
-                    if drawHealth and entry.healthBack and entry.healthFill then
-                        local ratio = humanoid.Health / math.max(humanoid.MaxHealth, 1)
-                        ratio = math.max(0, math.min(1, ratio))
-                        local barHeight = height * ratio
+                    if drawHealth and entry.healthOutline and entry.healthFill then
+                        local target = humanoid.Health / math.max(humanoid.MaxHealth, 1)
+                        target = math.max(0, math.min(1, target))
+                        local last = entry.lastHealth
+                        local ratio = target
+                        if last then
+                            ratio = last + (target - last) * 0.05
+                        end
+                        entry.lastHealth = ratio
 
-                        entry.healthBack.Position = Vector2.new(minX - 4, minY)
-                        entry.healthBack.Size = Vector2.new(2, height)
-                        entry.healthBack.Color = BLACK
-                        entry.healthBack.Transparency = 0.6
-                        entry.healthBack.Visible = true
+                        local barWidth = 3
+                        local barX = boxX - (barWidth + 4)
 
-                        entry.healthFill.Position = Vector2.new(minX - 4, maxY - barHeight)
-                        entry.healthFill.Size = Vector2.new(2, barHeight)
-                        entry.healthFill.Color = health_color(ratio)
-                        entry.healthFill.Transparency = 1
+                        entry.healthOutline.Position = UDim2.new(0, barX - 1, 0, guiY - 1)
+                        entry.healthOutline.Size = UDim2.new(0, barWidth + 2, 0, boxHeight + 2)
+                        entry.healthOutline.Visible = true
+
+                        entry.healthFill.Position = UDim2.new(0, 1, 0, (1 - ratio) * boxHeight + 1)
+                        entry.healthFill.Size = UDim2.new(0, barWidth, 0, ratio * boxHeight)
+                        entry.healthFill.BackgroundColor3 = health_color(ratio)
                         entry.healthFill.Visible = true
                     else
-                        if entry.healthBack then
-                            entry.healthBack.Visible = false
+                        if entry.healthOutline then
+                            entry.healthOutline.Visible = false
                         end
                         if entry.healthFill then
                             entry.healthFill.Visible = false
                         end
                     end
 
-                    -- vanilla roblox has no armor stat; games that have one
-                    -- expose it as an attribute, so that is what gets read
-                    local armor = character:GetAttribute("Armor") or humanoid:GetAttribute("Armor")
-                    if drawArmor and type(armor) == "number" and entry.armorBack and entry.armorFill then
-                        local maxArmor = character:GetAttribute("MaxArmor")
-                            or humanoid:GetAttribute("MaxArmor")
-                            or 100
-                        local ratio = armor / math.max(maxArmor, 1)
-                        ratio = math.max(0, math.min(1, ratio))
-                        local barHeight = height * ratio
+                    if drawArmor and entry.armorOutline and entry.armorFill then
+                        local target = read_armor(character, humanoid)
+                        local last = entry.lastArmor
+                        local ratio = target
+                        if last then
+                            ratio = last + (target - last) * 0.05
+                        end
+                        entry.lastArmor = ratio
 
-                        entry.armorBack.Position = Vector2.new(maxX + 2, minY)
-                        entry.armorBack.Size = Vector2.new(2, height)
-                        entry.armorBack.Color = BLACK
-                        entry.armorBack.Transparency = 0.6
-                        entry.armorBack.Visible = true
+                        local barWidth = 3
+                        local barX = boxX - (barWidth * 2 + 8)
 
-                        entry.armorFill.Position = Vector2.new(maxX + 2, maxY - barHeight)
-                        entry.armorFill.Size = Vector2.new(2, barHeight)
-                        entry.armorFill.Color = Color3.fromRGB(120, 180, 255)
-                        entry.armorFill.Transparency = 1
+                        entry.armorOutline.Position = UDim2.new(0, barX - 1, 0, guiY - 1)
+                        entry.armorOutline.Size = UDim2.new(0, barWidth + 2, 0, boxHeight + 2)
+                        entry.armorOutline.Visible = true
+
+                        entry.armorFill.Position = UDim2.new(0, 1, 0, (1 - ratio) * boxHeight + 1)
+                        entry.armorFill.Size = UDim2.new(0, barWidth, 0, ratio * boxHeight)
                         entry.armorFill.Visible = true
                     else
-                        if entry.armorBack then
-                            entry.armorBack.Visible = false
+                        if entry.armorOutline then
+                            entry.armorOutline.Visible = false
                         end
                         if entry.armorFill then
                             entry.armorFill.Visible = false
@@ -568,7 +691,25 @@ local function build_esp()
                 end
             end
         end
-    end)
+    end
+
+    -- PostSimulation matches the reference esp and keeps the overlay in step
+    -- with the physics tick rather than the render tick
+    if RunService.PostSimulation then
+        RunService.PostSimulation:Connect(function()
+            local ok, err = pcall(render)
+            if not ok then
+                warn("[drift esp] frame error: " .. tostring(err))
+            end
+        end)
+    else
+        RunService.RenderStepped:Connect(function()
+            local ok, err = pcall(render)
+            if not ok then
+                warn("[drift esp] frame error: " .. tostring(err))
+            end
+        end)
+    end
 end
 
 local okBuild, buildError = pcall(build_esp)
