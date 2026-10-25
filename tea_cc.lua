@@ -192,7 +192,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-25d"
+local VERSION = "2026-10-25e"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -260,7 +260,7 @@ y = block(main, "visuals", 1, y, "weather", {
 
 y = 0
 y = block(main, "visuals", 2, y, "world", {
-    { k = "dropdown", n = "lighting", f = "world_preset", o = { "Off", "Red", "Night", "Overcast", "Storm", "Dusk", "Void" }, d = { "Off" }, req = true },
+    { k = "dropdown", n = "lighting", f = "world_preset", o = { "Off", "Red", "Night", "Overcast", "Storm", "Dusk", "Void", "Custom" }, d = { "Off" }, req = true },
     { k = "colorpicker", n = "sky tint", f = "world_sky_top", d = Color3.fromRGB(255, 255, 255) },
     { k = "colorpicker", n = "ground tint", f = "world_sky_bottom", d = Color3.fromRGB(255, 255, 255) },
     { k = "colorpicker", n = "ambient", f = "world_ambient", d = Color3.fromRGB(255, 255, 255) },
@@ -1468,7 +1468,7 @@ end
 -- (particles). Nothing here reads another axis, so snow on a red sky, or a
 -- night sky with lightning over rain, both fall out for free. Writes go
 -- through pcall because Lighting's property set varies between clients.
-local World = { kind = "None", last = 0, rigs = {}, flash_at = 0, atmo_owned = false }
+local World = { kind = "None", last = 0, rigs = {}, flash_at = 0, atmo_owned = false, restored = false }
 
 do
     local Lighting = game:GetService("Lighting")
@@ -1514,6 +1514,19 @@ do
 
     local PALETTES = {
         ["Off"] = { keep = true },
+        -- neutral base: every channel is 1.0, so tint() is the identity and the
+        -- four pickers below are absolute colours rather than a multiplier.
+        -- That is the "any colour" path - sky, ground, ambient and fog are
+        -- whatever you dial, with no palette family filtering them.
+        ["Custom"] = {
+            custom = true,
+            ambient = Color3.fromRGB(255, 255, 255),
+            outdoor = Color3.fromRGB(255, 255, 255),
+            top = Color3.fromRGB(255, 255, 255),
+            bottom = Color3.fromRGB(255, 255, 255),
+            fog = Color3.fromRGB(255, 255, 255),
+            atmo = { Density = 0.34, Offset = 0, Glare = 1, Haze = 2.5 },
+        },
         ["Red"] = {
             ambient = Color3.fromRGB(120, 26, 26),
             outdoor = Color3.fromRGB(190, 60, 50),
@@ -1705,9 +1718,41 @@ do
         end
     end
 
+    local function restore_lighting()
+        for key, value in pairs(snap) do
+            write(Lighting, key, value)
+        end
+        if atmo_snap and game_atmo then
+            for key, value in pairs(atmo_snap) do
+                write(game_atmo, key, value)
+            end
+        elseif World.atmo_owned then
+            local atmo = Lighting:FindFirstChild("TeaWorldAtmosphere")
+            if atmo then
+                atmo:Destroy()
+            end
+            World.atmo_owned = false
+        end
+    end
+
     local function apply_lighting()
         local name = first(fget("world_preset", { "Off" }), "Off")
         local palette = PALETTES[name] or PALETTES["Off"]
+
+        -- Off is a real restore, not a no-op. Every property the palettes touch
+        -- goes back to the snapshot taken before anything wrote, so the world
+        -- looks like it did before the script ran. It fires once on the edge
+        -- and then stops writing, so the game's own day/night cycle is free to
+        -- resume instead of being pinned at the snapshot clock. Weather keeps
+        -- running either way - it never touches Lighting.
+        if palette.keep then
+            if not World.restored then
+                restore_lighting()
+                World.restored = true
+            end
+            return
+        end
+        World.restored = false
 
         local pick = {
             top = flags["world_sky_top"] or WHITE,
@@ -1763,6 +1808,18 @@ do
         write(atmo, "Glare", palette.atmo.Glare)
         write(atmo, "Haze", palette.atmo.Haze)
         write(atmo, "Color", tint(palette.top, pick.top))
+
+        if palette.custom then
+            -- no family to inherit from, so the atmosphere reads straight off
+            -- the pickers: sky tint for the haze, ground tint scaled down for
+            -- the shadow end.
+            write(atmo, "Color", pick.top)
+            write(atmo, "Decay", Color3.new(
+                pick.bottom.R * 0.55,
+                pick.bottom.G * 0.55,
+                pick.bottom.B * 0.55
+            ))
+        end
     end
 
     local function flash_tick()
