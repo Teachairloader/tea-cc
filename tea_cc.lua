@@ -21,8 +21,8 @@
     palette, lighting numbers and weather are three independent axes, so snow
     over a red sky is a supported state rather than a preset. Weather is three
     layered emitters (far/mid/near) that follow the camera. Weapon and
-    triggerbot sections removed. Camlock ships on right mouse; the aim key
-    stays as a second input.
+    triggerbot sections removed. Camlock ships on one aim key, defaulting to
+    right mouse.
 ]]
 
 local UI_URL = "https://raw.githubusercontent.com/panduh16/juju/main/ui.lua"
@@ -192,7 +192,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-25e"
+local VERSION = "2026-10-25f"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -204,8 +204,7 @@ local y = 0
 y = block(main, "combat", 1, y, "aimbot", {
     { k = "toggle", n = "enabled", f = "aim_enabled", d = true },
     { k = "dropdown", n = "activation", f = "aim_activation", o = { "Toggle", "Hold" }, d = { "Toggle" }, req = true },
-    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },
-    { k = "toggle", n = "right mouse", f = "aim_rmb", d = true },
+    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.UserInputType.MouseButton2 },
     { k = "dropdown", n = "hit part", f = "aim_hit_part", o = { "Head", "Torso", "Closest Part", "Nearest Bone" }, d = { "Head" }, req = true },
     { k = "slider", n = "y offset", f = "aim_y_offset", min = -3, max = 3, d = -0.6, dec = 2 },
     { k = "slider", n = "fov size", f = "aim_fov", min = 0, max = 1000, d = 120 },
@@ -410,7 +409,11 @@ end
 -- build outlives a default change. Only a missing or unusable binding is
 -- rewritten here - a deliberate rebind is left alone.
 if not key_of(flags["aim_key"]) then
-    flags["aim_key"] = Enum.KeyCode.Q
+    flags["aim_key"] = Enum.UserInputType.MouseButton2
+elseif flags["aim_key"] == Enum.KeyCode.Q then
+    -- Q was the shipped default until it was retired; a stored copy of it is
+    -- the old default, not a deliberate rebind, so it moves with the new one.
+    flags["aim_key"] = Enum.UserInputType.MouseButton2
 end
 
 -- ------------------------------------------------------------------ aimbot ---
@@ -567,15 +570,27 @@ do
     -- Right mouse is the shipped activation. Roblox reports RMB as processed
     -- because the same click drives camera rotation, so mouse input never filters
     -- on that flag; keyboard still does. The aim key stays as a second input.
+    -- A binding is either a KeyCode or a UserInputType now - mouse buttons are
+    -- legal aim keys. Comparing input.KeyCode against a UserInputType is always
+    -- false, so the enum type decides which half of the input event to read.
     local function is_aim_input(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton2 then
-            return fget("aim_rmb", true)
+        local bound = key_of(fget("aim_key", Enum.UserInputType.MouseButton2))
+        if typeof(bound) ~= "EnumItem" then
+            return false
         end
-        return input.KeyCode == key_of(fget("aim_key", Enum.KeyCode.Q))
+        if bound.EnumType == Enum.UserInputType then
+            return input.UserInputType == bound
+        end
+        return input.KeyCode == bound
     end
 
     UserInputService.InputBegan:Connect(function(input, processed)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton2 and processed then
+        -- Roblox flags every mouse click as processed because the same press
+        -- drives camera rotation. Keyboard is only accepted when the game has
+        -- not already consumed it.
+        local is_mouse = input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.MouseButton2
+        if processed and not is_mouse then
             return
         end
         if not fget("aim_enabled", true) then
@@ -620,9 +635,14 @@ do
         local target_player = nil
 
         if activation == "Hold" then
-            local held = key_down(fget("aim_key", Enum.KeyCode.Q))
-            if not held and fget("aim_rmb", true) then
-                held = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            local held = false
+            local bound = key_of(fget("aim_key", Enum.UserInputType.MouseButton2))
+            if typeof(bound) == "EnumItem" then
+                if bound.EnumType == Enum.UserInputType then
+                    held = UserInputService:IsMouseButtonPressed(bound)
+                else
+                    held = key_down(bound)
+                end
             end
             if held then
                 target_player = nearest()
