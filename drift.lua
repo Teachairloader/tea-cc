@@ -168,13 +168,27 @@ y = block(main, "combat", 1, y, "silent aim", {
     { k = "slider", n = "fov size", f = "silent_fov", min = 0, max = 1000, d = 250 },
     { k = "toggle", n = "wall check", f = "silent_wall_check", d = false },
     { k = "toggle", n = "team check", f = "silent_team_check", d = true },
+})
+
+]==]
+
+-- Split off the overlay rows: aimbot (299px) + silent aim (189px) already fills
+-- 92% of combat column 1, so tracer/dot live under player esp on visuals.
+local SILENT_VIS_MENU = [==[y = block(main, "visuals", 1, y, "silent aim visuals", {
     { k = "toggle", n = "tracer", f = "silent_tracer", d = true },
     { k = "dropdown", n = "tracer from", f = "silent_tracer_from", o = { "Mouse", "Bottom", "Character" }, d = { "Mouse" } },
     { k = "toggle", n = "target dot", f = "silent_dot", d = true },
     { k = "slider", n = "dot size", f = "silent_dot_size", min = 1, max = 20, d = 6 },
+    { k = "toggle", n = "debug remotes", f = "silent_debug", d = false },
 })
 
 ]==]
+
+source = lit(
+    source,
+    'y = 0\ny = block(main, "visuals", 2, y, "world", {',
+    SILENT_VIS_MENU .. 'y = 0\ny = block(main, "visuals", 2, y, "world", {'
+)
 
 -- ----------------------------------------------------------------- esp (menu) ---
 -- Lives on visuals column 2, stacked under "world". Combat column 1 already
@@ -329,12 +343,19 @@ do
         return nil
     end
 
+    -- Re-entrancy guard: the redirected Raycast path would otherwise catch the
+    -- wall-check raycasts this file makes and curve them at the target.
+    local busy = false
+
     local function blocked(origin, part)
         local params = RaycastParams.new()
         params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = { Client.Character, part.Parent }
         params.IgnoreWater = true
-        return Workspace:Raycast(origin, part.Position - origin, params) ~= nil
+        busy = true
+        local hit = Workspace:Raycast(origin, part.Position - origin, params)
+        busy = false
+        return hit ~= nil
     end
 
     local function closest()
@@ -378,15 +399,50 @@ do
     end
 
     -- ------------------------------------------------------------- redirection ---
-    -- Guns call FireServer(direction) with the camera's unit ray. A Vector3 of
-    -- length ~1 that points within ~25 degrees of the look vector is that
-    -- direction argument; positions are studs long, so the magnitude gate keeps
-    -- them out. Everything else is forwarded untouched.
+    -- Three paths, all gated on active() so a disabled silent aim costs one
+    -- function call per remote:
+    --   1. FireServer / InvokeServer unit-direction arg   (camera ray)
+    --   2. FireServer / InvokeServer world-point arg      (mouse.Hit)
+    --   3. Workspace:Raycast direction, gun in hand       (client-side bullet ray)
     local wrap = newcclosure or function(fn)
         return fn
     end
 
-    local redirected = false
+    local debugLeft = 20
+
+    local function debugLog(method, subject, ...)
+        if debugLeft <= 0 or not fget("silent_debug", false) then
+            return
+        end
+
+        local kinds = {}
+        for index = 1, select("#", ...) do
+            kinds[index] = typeof(select(index, ...))
+        end
+
+        local name = "?"
+        pcall(function()
+            name = subject:GetFullName()
+        end)
+
+        debugLeft = debugLeft - 1
+        print(string.format("[drift] %s %s (%s)", method, name, table.concat(kinds, ", ")))
+    end
+
+    -- Same heuristic tea.cc uses for its rapid fire: a Tool carrying an Ammo
+    -- child. Keeps the Raycast path from touching movement or camera rays.
+    local function gun_equipped()
+        local character = Client.Character
+        if not character then
+            return false
+        end
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") and child:FindFirstChild("Ammo") then
+                return true
+            end
+        end
+        return false
+    end
 
     if hookmetamethod then
         pcall(function()
@@ -394,61 +450,89 @@ do
             oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
                 local method = getnamecallmethod()
 
-                if method ~= "FireServer" and method ~= "InvokeServer" then
+                if busy or not active() then
                     return oldNamecall(self, ...)
                 end
 
-                if not active() then
+                local isRemote = method == "FireServer" or method == "InvokeServer"
+                local isRay = method == "Raycast" and self == Workspace
+
+                if not isRemote and not isRay then
+                    return oldNamecall(self, ...)
+                end
+
+                if isRay and not gun_equipped() then
                     return oldNamecall(self, ...)
                 end
 
                 local camera = Workspace.CurrentCamera
-                local target = camera and closest()
+                if not camera then
+                    return oldNamecall(self, ...)
+                end
+
+                busy = true
+                local target = closest()
+                busy = false
                 if not target then
                     return oldNamecall(self, ...)
                 end
 
-                local delta = target.Position - camera.CFrame.Position
-                if delta.Magnitude < 0.01 then
-                    return oldNamecall(self, ...)
-                end
+                debugLog(method, self, ...)
 
-                local direction = delta.Unit
-                local look = camera.CFrame.LookVector
                 local arguments = table.pack(...)
+                local look = camera.CFrame.LookVector
+                local aimPoint = target.Position
+                local delta = aimPoint - camera.CFrame.Position
+                local cursorRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
                 local changed = false
 
-                for index = 1, arguments.n do
-                    local value = arguments[index]
-                    if typeof(value) == "Vector3" then
-                        local magnitude = value.Magnitude
-                        if magnitude > 0.9
-                            and magnitude < 1.1
-                            and value.Unit:Dot(look) > 0.9
+                if delta.Magnitude > 0.01 then
+                    for index = 1, arguments.n do
+                        local value = arguments[index]
+
+                        if typeof(value) == "Vector3" then
+                            local magnitude = value.Magnitude
+
+                            if magnitude > 0.9
+                                and magnitude < 1.1
+                                and value.Unit:Dot(look) > 0.9
+                            then
+                                -- unit direction: the camera's own ray
+                                arguments[index] = delta.Unit
+                                changed = true
+                            elseif magnitude > 2 then
+                                -- a world point: match it against the cursor ray
+                                -- rather than the centre look vector, because the
+                                -- cursor can sit well off centre inside the fov
+                                local toPoint = value - cursorRay.Origin
+                                local along = toPoint:Dot(cursorRay.Direction)
+                                if along > 0
+                                    and (toPoint - cursorRay.Direction * along).Magnitude < 6
+                                then
+                                    arguments[index] = aimPoint
+                                    changed = true
+                                end
+                            end
+                        elseif typeof(value) == "CFrame"
+                            and value.LookVector:Dot(look) > 0.9
                         then
-                            arguments[index] = direction
+                            arguments[index] = CFrame.lookAt(value.Position, aimPoint)
                             changed = true
                         end
                     end
                 end
 
-                if not changed then
-                    -- position-style aim args: the world point under the cursor.
-                    -- Only rewritten when it sits almost exactly on the look ray,
-                    -- so movement / physics remotes keep their own vectors.
-                    for index = 1, arguments.n do
-                        local value = arguments[index]
-                        if typeof(value) == "Vector3" and value.Magnitude > 2 then
-                            local toPoint = value - camera.CFrame.Position
-                            if toPoint.Magnitude > 0.5 then
-                                local along = toPoint.Unit:Dot(look)
-                                local miss = (toPoint - look * toPoint:Dot(look)).Magnitude
-                                if along > 0.98 and miss < 4 then
-                                    arguments[index] = target.Position
-                                    changed = true
-                                end
-                            end
-                        end
+                if isRay and not changed then
+                    local origin = arguments[1]
+                    local direction = arguments[2]
+                    if typeof(origin) == "Vector3"
+                        and typeof(direction) == "Vector3"
+                        and direction.Magnitude > 0.5
+                        and direction.Unit:Dot(cursorRay.Direction) > 0.9
+                    then
+                        -- direction carries the range; the replacement keeps it
+                        arguments[2] = aimPoint - origin
+                        changed = true
                     end
                 end
 
@@ -456,7 +540,6 @@ do
                     return oldNamecall(self, ...)
                 end
 
-                redirected = true
                 return oldNamecall(self, table.unpack(arguments, 1, arguments.n))
             end))
         end)
