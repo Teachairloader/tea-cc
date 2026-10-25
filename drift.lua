@@ -3,8 +3,8 @@
 
     Loads the tea.cc loader, then rewrites it before it compiles:
 
-      - window 575x450 -> 690x552 (content area 430 -> 532), left column
-        overflow threshold 405 -> 507 so the frame still grows correctly
+      - window 575x450 -> 690x710 (content area 430 -> 690), left column
+        overflow threshold 405 -> 665 so the frame still grows correctly
       - accent, logo, cursor, crosshair, theme json: pink -> #FFFFFF
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
@@ -153,7 +153,7 @@ local EDITS = {
         'getgenv().script_name = "Tea.cc"',
         'getgenv().script_name = "Drift"\ngetgenv().script_version = ""',
     },
-    { "local TAB_HEIGHT = 430", "local TAB_HEIGHT = 532" },
+    { "local TAB_HEIGHT = 430", "local TAB_HEIGHT = 690" },
 
     -- accent family and theme json (spaced + unspaced forms both appear)
     { "255, 121, 198", "255, 255, 255" },
@@ -195,6 +195,27 @@ local ESP_MENU = [==[y = block(main, "visuals", 1, y, "esp", {
     { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 2000 },
 })
 
+y = 0
+y = block(main, "visuals", 2, y, "interface", {
+    { k = "toggle", n = "watermark", f = "ui_watermark", d = false },
+    { k = "toggle", n = "keybind list", f = "ui_keybind_list", d = false },
+    { k = "slider", n = "menu scale", f = "ui_scale", min = 80, max = 120, d = 100, suffix = "%" },
+})
+y = block(main, "visuals", 2, y, "crosshair", {
+    { k = "toggle", n = "enabled", f = "crosshair_enabled", d = false },
+    { k = "colorpicker", n = "colour", f = "crosshair_color", d = Color3.fromRGB(255, 255, 255) },
+    { k = "toggle", n = "spin", f = "crosshair_spin", d = true },
+    { k = "toggle", n = "resize", f = "crosshair_resize", d = true },
+})
+y = block(main, "visuals", 2, y, "anti lock", {
+    { k = "toggle", n = "enabled", f = "misc_antilock", d = false },
+    { k = "toggle", n = "resolver", f = "misc_resolver", d = false },
+})
+y = block(main, "visuals", 2, y, "avatar", {
+    { k = "toggle", n = "aura", f = "avatar_aura", d = false },
+    { k = "toggle", n = "china hat", f = "avatar_china_hat", d = false },
+})
+
 ]==]
 
 source = lit(
@@ -211,26 +232,153 @@ source = lit(
     ESP_MENU
 )
 
--- --------------------------------------------------------------- misc (lock) ---
--- Anti lock and resolver land at the end of misc column 2, under crosshair.
-local LOCK_MENU = [==[y = block(main, "misc", 2, y, "anti lock", {
-    { k = "toggle", n = "enabled", f = "misc_antilock", d = false },
-    { k = "toggle", n = "resolver", f = "misc_resolver", d = false },
+-- ------------------------------------------------------------ layout (menu) ---
+-- The extras used to open as their own window over the menu. They are sections
+-- of the misc tab now: world, weather and cframe speed down column 1, the
+-- character panels plus orbit down column 2. Nothing loads after the menu opens,
+-- so there is no second ScreenGui to close and no ordering race between the menu
+-- being built and the extras arriving.
+--
+-- Interface, crosshair, anti lock and avatar move to visuals column 2. That is
+-- window chrome sitting on the visuals tab, and the space it frees is what lets
+-- the whole misc tab fit one content area.
+local WEATHER_OLD = [==[y = block(main, "visuals", 1, y, "weather", {
+    { k = "dropdown", n = "type", f = "world_weather", o = { "None", "Snow", "Rain", "Storm" }, d = { "None" }, req = true },
+    { k = "slider", n = "density", f = "world_weather_rate", min = 0, max = 100, d = 55 },
+    { k = "slider", n = "size", f = "world_weather_size", min = 0.2, max = 4, d = 1, dec = 1 },
+    { k = "slider", n = "fall speed", f = "world_weather_speed", min = 20, max = 200, d = 100 },
+    { k = "slider", n = "wind", f = "world_weather_wind", min = -80, max = 80, d = 14 },
+    { k = "colorpicker", n = "colour", f = "world_weather_color", d = Color3.fromRGB(235, 244, 255) },
+    { k = "toggle", n = "lightning", f = "world_lightning", d = false },
 })
 
 ]==]
 
-source = lit(
-    source,
-    "-- configs (juju",
-    LOCK_MENU .. "-- configs (juju"
-)
+local WORLD_OLD = [==[y = 0
+y = block(main, "visuals", 2, y, "world", {
+    { k = "dropdown", n = "lighting", f = "world_preset", o = { "Off", "Red", "Night", "Overcast", "Storm", "Dusk", "Void", "Custom" }, d = { "Off" }, req = true },
+    { k = "colorpicker", n = "sky tint", f = "world_sky_top", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ground tint", f = "world_sky_bottom", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ambient", f = "world_ambient", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "fog", f = "world_fog", d = Color3.fromRGB(255, 255, 255) },
+    { k = "slider", n = "brightness", f = "world_brightness", min = 0, max = 4, d = 2, dec = 2 },
+    { k = "slider", n = "time of day", f = "world_clock", min = 0, max = 24, d = 14, dec = 1 },
+    { k = "slider", n = "fog distance", f = "world_fog_end", min = 0, max = 5000, d = 800 },
+    { k = "slider", n = "exposure", f = "world_exposure", min = -3, max = 3, d = 0, dec = 2 },
+    { k = "toggle", n = "fullbright", f = "world_fullbright", d = false },
+    { k = "toggle", n = "remove fog", f = "world_no_fog", d = false },
+})
 
--- ------------------------------------------------------------ movement (menu) ---
--- Super jump and fly close out misc column 1, under legit macro. Elements are
--- kept by flag so the runtime's bind toggle can drive the widget itself, which
--- keeps the checkmark, the flag a config saves and the live feature in step.
-local MOVE_MENU = [==[do
+]==]
+
+local MISC_OLD = [==[-- misc -----------------------------------------------------------------
+y = 0
+y = block(main, "misc", 1, y, "skin changer", {
+    { k = "toggle", n = "enabled", f = "skin_enabled", d = false },
+    { k = "dropdown", n = "material", f = "skin_material", o = { "ForceField", "Keep", "Neon", "Glass", "Plastic", "SmoothPlastic", "Metal", "Ice" }, d = { "ForceField" }, req = true },
+    { k = "colorpicker", n = "skin colour", f = "skin_color" },
+    { k = "slider", n = "transparency", f = "skin_transparency", min = 0, max = 1, d = 0.45, dec = 2 },
+})
+y = block(main, "misc", 1, y, "avatar", {
+    { k = "toggle", n = "aura", f = "avatar_aura", d = false },
+    { k = "toggle", n = "china hat", f = "avatar_china_hat", d = false },
+})
+y = block(main, "misc", 1, y, "fake macro", {
+    { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
+    { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
+})
+y = block(main, "misc", 1, y, "legit macro", {
+    { k = "toggle", n = "enabled", f = "legit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "legit_key", d = Enum.KeyCode.X },
+    { k = "slider", n = "delay", f = "legit_delay", min = 0, max = 200, d = 0, suffix = "ms" },
+})
+y = block(main, "misc", 1, y, "orbit", {
+    { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
+    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
+    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
+    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
+})
+
+y = 0
+y = block(main, "misc", 2, y, "interface", {
+    { k = "toggle", n = "watermark", f = "ui_watermark", d = false },
+    { k = "toggle", n = "keybind list", f = "ui_keybind_list", d = false },
+    { k = "slider", n = "menu scale", f = "ui_scale", min = 80, max = 120, d = 100, suffix = "%" },
+})
+y = block(main, "misc", 2, y, "crosshair", {
+    { k = "toggle", n = "enabled", f = "crosshair_enabled", d = false },
+    { k = "colorpicker", n = "colour", f = "crosshair_color", d = Color3.fromRGB(255, 255, 255) },
+    { k = "toggle", n = "spin", f = "crosshair_spin", d = true },
+    { k = "toggle", n = "resize", f = "crosshair_resize", d = true },
+})
+y = block(main, "misc", 2, y, "cframe speed", {
+    { k = "toggle", n = "enabled", f = "cspeed_enabled", d = false },
+    { k = "keybind", n = "bind", f = "cspeed_key", d = Enum.KeyCode.LeftAlt },
+    { k = "slider", n = "speed", f = "cspeed_value", min = 10, max = 400, d = 60, suffix = " s/s" },
+    { k = "toggle", n = "hold", f = "cspeed_hold", d = false },
+})
+
+]==]
+
+-- Super jump and fly are built by hand rather than by block(): the runtime's
+-- bind toggle drives the widget itself, so the checkmark, the saved flag and the
+-- live feature stay in step. Elements are published for that binding.
+local MISC_NEW = [==[-- misc -----------------------------------------------------------------
+y = 0
+y = block(main, "misc", 1, y, "world", {
+    { k = "dropdown", n = "lighting", f = "world_preset", o = { "Off", "Red", "Night", "Overcast", "Storm", "Dusk", "Void", "Custom" }, d = { "Off" }, req = true },
+    { k = "colorpicker", n = "sky tint", f = "world_sky_top", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ground tint", f = "world_sky_bottom", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ambient", f = "world_ambient", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "fog", f = "world_fog", d = Color3.fromRGB(255, 255, 255) },
+    { k = "slider", n = "brightness", f = "world_brightness", min = 0, max = 4, d = 2, dec = 2 },
+    { k = "slider", n = "time of day", f = "world_clock", min = 0, max = 24, d = 14, dec = 1 },
+    { k = "slider", n = "fog distance", f = "world_fog_end", min = 0, max = 5000, d = 800 },
+    { k = "slider", n = "exposure", f = "world_exposure", min = -3, max = 3, d = 0, dec = 2 },
+    { k = "toggle", n = "fullbright", f = "world_fullbright", d = false },
+    { k = "toggle", n = "remove fog", f = "world_no_fog", d = false },
+})
+y = block(main, "misc", 1, y, "weather", {
+    { k = "dropdown", n = "type", f = "world_weather", o = { "None", "Snow", "Rain", "Storm" }, d = { "None" }, req = true },
+    { k = "slider", n = "density", f = "world_weather_rate", min = 0, max = 100, d = 55 },
+    { k = "slider", n = "size", f = "world_weather_size", min = 0.2, max = 4, d = 1, dec = 1 },
+    { k = "slider", n = "fall speed", f = "world_weather_speed", min = 20, max = 200, d = 100 },
+    { k = "slider", n = "wind", f = "world_weather_wind", min = -80, max = 80, d = 14 },
+    { k = "colorpicker", n = "colour", f = "world_weather_color", d = Color3.fromRGB(235, 244, 255) },
+    { k = "toggle", n = "lightning", f = "world_lightning", d = false },
+})
+y = block(main, "misc", 1, y, "fake macro", {
+    { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
+    { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
+})
+y = block(main, "misc", 1, y, "cframe speed", {
+    { k = "toggle", n = "enabled", f = "cspeed_enabled", d = false },
+    { k = "keybind", n = "bind", f = "cspeed_key", d = Enum.KeyCode.LeftAlt },
+    { k = "slider", n = "speed", f = "cspeed_value", min = 10, max = 400, d = 60, suffix = " s/s" },
+    { k = "toggle", n = "hold", f = "cspeed_hold", d = false },
+})
+
+y = 0
+y = block(main, "misc", 2, y, "orbit", {
+    { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
+    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
+    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
+    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
+})
+y = block(main, "misc", 2, y, "skin changer", {
+    { k = "toggle", n = "enabled", f = "skin_enabled", d = false },
+    { k = "dropdown", n = "material", f = "skin_material", o = { "ForceField", "Keep", "Neon", "Glass", "Plastic", "SmoothPlastic", "Metal", "Ice" }, d = { "ForceField" }, req = true },
+    { k = "colorpicker", n = "skin colour", f = "skin_color" },
+    { k = "slider", n = "transparency", f = "skin_transparency", min = 0, max = 1, d = 0.45, dec = 2 },
+})
+y = block(main, "misc", 2, y, "legit macro", {
+    { k = "toggle", n = "enabled", f = "legit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "legit_key", d = Enum.KeyCode.X },
+    { k = "slider", n = "delay", f = "legit_delay", min = 0, max = 200, d = 0, suffix = "ms" },
+})
+do
     local elements = {}
 
     local function keyed_block(group, tab, side, cursor, title, rows)
@@ -253,13 +401,13 @@ local MOVE_MENU = [==[do
         return cursor + size
     end
 
-    y = keyed_block(main, "misc", 1, y, "super jump", {
+    y = keyed_block(main, "misc", 2, y, "super jump", {
         { k = "toggle", n = "enabled", f = "sjump_enabled", d = false },
         { k = "keybind", n = "bind", f = "sjump_key", d = Enum.KeyCode.J },
         { k = "slider", n = "jump power", f = "sjump_power", min = 50, max = 500, d = 180 },
     })
 
-    y = keyed_block(main, "misc", 1, y, "fly", {
+    y = keyed_block(main, "misc", 2, y, "fly", {
         { k = "toggle", n = "enabled", f = "fly_enabled", d = false },
         { k = "keybind", n = "bind", f = "fly_key", d = Enum.KeyCode.F },
         { k = "slider", n = "speed", f = "fly_speed", min = 10, max = 300, d = 80 },
@@ -270,11 +418,42 @@ end
 
 ]==]
 
-source = lit(
-    source,
-    'y = 0\ny = block(main, "misc", 2, y, "interface", {',
-    MOVE_MENU .. 'y = 0\ny = block(main, "misc", 2, y, "interface", {'
-)
+local VISUAL_LAYOUT = {
+    { WEATHER_OLD, "", "visuals/weather" },
+    { WORLD_OLD, "", "visuals/world" },
+}
+
+local MISC_LAYOUT = {
+    { MISC_OLD, MISC_NEW, "misc" },
+}
+
+-- forward applies old -> new. A miss is reported and the text is left alone, so
+-- a shifted upstream seam costs one section instead of the whole tab.
+local function swap_pairs(text, pairs, forward)
+    if forward then
+        for _, pair in ipairs(pairs) do
+            local before = text
+            text = lit(text, pair[1], pair[2])
+            if text == before then
+                warn("[drift] layout seam missed: " .. tostring(pair[3]))
+            end
+        end
+    else
+        for index = #pairs, 1, -1 do
+            local pair = pairs[index]
+            local before = text
+            text = lit(text, pair[2], pair[1])
+            if text == before then
+                warn("[drift] layout revert missed: " .. tostring(pair[3]))
+            end
+        end
+    end
+    return text
+end
+
+source = swap_pairs(source, VISUAL_LAYOUT, true)
+source = swap_pairs(source, MISC_LAYOUT, true)
+
 
 -- ------------------------------------------------- camlock / rapid / skin ---
 -- Base-source edits. The aim runtime keeps its flags; camlock renames the block
@@ -1937,7 +2116,8 @@ source = lit(
 )
 
 -- --------------------------------------------------------- juju ui edits ---
--- Runs inside the tea.cc chunk, where `source` already holds the juju ui.
+-- Runs inside the tea.cc chunk, after juju's ui.lua has been fetched and before
+-- it is compiled, so every window literal is rewritten once and only once.
 -- 575/450/405 each appear only as the window width, height and left column
 -- overflow threshold in that file, so a plain swap is exact.
 local UI_PATCH = [==[
@@ -1961,10 +2141,16 @@ if type(source) == "string" then
     end
 
     source = lit_(source, "575", "690")
-    source = lit_(source, "450", "552")
-    source = lit_(source, "405", "507")
+    source = lit_(source, "450", "710")
+    source = lit_(source, "405", "665")
     source = lit_(source, "udim2_new(0, 35, 0, 35)", "udim2_new(0, 40, 0, 40)")
     source = lit_(source, "\r\n", "\n")
+
+    -- the menu is laid out for 690x710, so a missed window patch would size
+    -- every section for a frame that is not there. Say so rather than clip.
+    if not source:find("udim2_new(0, 690, 0, 710)", 1, true) then
+        warn("[drift] juju window anchors moved - frame left at stock 575x450")
+    end
 
     -- header text: the stock offsets (x +5, y +3 / +19) sit on the top edge of
     -- a 35px mark; the 40px mark needs the label optically centred instead.
@@ -1993,8 +2179,8 @@ end
 
 source = lit(
     source,
-    'if not okFetch or type(source) ~= "string" or #source < 1000 then',
-    UI_PATCH .. '\nif not okFetch or type(source) ~= "string" or #source < 1000 then'
+    '-- ---------------------------------------------------------------- compile ---',
+    UI_PATCH .. '\n-- ---------------------------------------------------------------- compile ---'
 )
 
 -- ----------------------------------------------------------------- compile --
@@ -2008,4 +2194,4 @@ if not okRun then
     return warn("[drift] tea.cc failed to run: " .. tostring(result))
 end
 
-print("[drift] loaded - 690x552, white, mark Drift, logo " .. (logo_ready and "local" or "upstream"))
+print("[drift] loaded - 690x710, white, mark Drift, logo " .. (logo_ready and "local" or "upstream"))
