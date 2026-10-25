@@ -1479,8 +1479,7 @@ if patched == source or not patched:find("690", 1, true) then
     warn("[drift] juju ui patch did not apply - menu left at stock 575x450")
 else
     source = patched
-end ~= "string" or #source < 1000 then'
-)
+end
 
 -- ----------------------------------------------------------------- compile --
 local chunk, compileError = loadstring(source)
