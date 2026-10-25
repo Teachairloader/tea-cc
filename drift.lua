@@ -173,11 +173,51 @@ y = block(main, "combat", 1, y, "silent aim", {
 
 ]==]
 
+-- ----------------------------------------------------------------- esp (menu) ---
+-- Own block(): the esp section is long enough that sharing silent aim's block
+-- would push every silent control off the column.
+local ESP_MENU = [==[
+y = block(main, "combat", 1, y, "esp", {
+    { k = "toggle", n = "enabled", f = "esp_enabled", d = false },
+    { k = "toggle", n = "box", f = "esp_box", d = true },
+    { k = "toggle", n = "filled box", f = "esp_filled", d = false },
+    { k = "toggle", n = "gradient", f = "esp_gradient", d = true },
+    { k = "toggle", n = "name", f = "esp_name", d = true },
+    { k = "toggle", n = "distance", f = "esp_distance", d = true },
+    { k = "toggle", n = "tool", f = "esp_tool", d = false },
+    { k = "toggle", n = "health bar", f = "esp_health", d = true },
+    { k = "toggle", n = "armor bar", f = "esp_armor", d = false },
+    { k = "dropdown", n = "font", f = "esp_font", o = { "SmallestPixel", "ProggyClean", "ProggyTiny", "Visitor", "Tahoma", "TahomaBold", "Verdana", "Stratum2", "WindowsXP" }, d = { "SmallestPixel" } },
+    { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 1000 },
+    { k = "toggle", n = "team check", f = "esp_team_check", d = true },
+})
+
+]==]
+
 source = lit(
     source,
     'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {',
-    SILENT_MENU .. 'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {'
+    SILENT_MENU .. ESP_MENU .. 'y = 0\ny = block(main, "combat", 2, y, "rapid fire", {'
 )
+
+-- ---------------------------------------------------------------- esp (body) ---
+-- The overlay esp carries its own fonts (base64 TTFs), which is most of a
+-- megabyte, so it lives as a second file and gets folded into the same chunk.
+-- An empty string here leaves the menu inert instead of failing the load.
+local ESP_URL =
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/5eeda95cd04100696e6e5b820d347a4369db559c/esp.lua"
+local espChunk = ""
+
+pcall(function()
+    local body = game:HttpGet(ESP_URL)
+    if type(body) == "string" and #body > 1000 then
+        espChunk = body
+    end
+end)
+
+if espChunk == "" then
+    warn("[drift] could not fetch esp.lua - esp options stay inert")
+end
 
 -- --------------------------------------------------- silent aim (runtime) ---
 -- Appended before the finish marker, not after `return menu`, so it stays live.
@@ -455,7 +495,7 @@ end
 source = lit(
     source,
     "-- ----------------------------------------------------------------- finish ---",
-    SILENT_RUNTIME .. "-- ----------------------------------------------------------------- finish ---"
+    SILENT_RUNTIME .. espChunk .. "-- ----------------------------------------------------------------- finish ---"
 )
 
 -- --------------------------------------------------------- juju ui edits ---
