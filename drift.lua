@@ -246,9 +246,9 @@ source = lit(
     [==[    { k = "dropdown", n = "skin", f = "skin_choice", o = { "Inferno", "Galaxy", "Matrix", "RedDeath", "GoldGlory" }, d = { "Inferno" }, req = true },]==]
 )
 
--- camlock input is owned by tea.cc: the base carries a right-mouse toggle
--- (aim_rmb, default on) plus is_aim_input/aim_held, so drift no longer
--- rewrites that path. Two writers on the same block was how a rebind used
+-- camlock input is owned by tea.cc: one aim key, defaulting to right mouse,
+-- read through is_aim_input across both KeyCode and UserInputType. Drift does
+-- not rewrite that path - two writers on the same block was how a rebind used
 -- to drift between the edge handler and hold mode.
 
 -- rapid fire: task.wait floors at one frame, so anything above 60/s fires a
