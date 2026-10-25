@@ -4,10 +4,7 @@
     Loads the tea.cc loader, then rewrites it before it compiles:
 
       - window 575x450 -> 690x552 (content area 430 -> 532), left column
-        overflow threshold 405 -> 507 so the frame still grows correctly.
-        Anchored on tea.cc's recolour helper; if that seam ever moves the
-        layout edit is skipped and TAB_HEIGHT reverts to 430, so sections can
-        never be sized for a window that is not there.
+        overflow threshold 405 -> 507 so the frame still grows correctly
       - accent, logo, cursor, crosshair, theme json: pink -> #FFFFFF
       - hover / value / error / alert tints: pink family -> neutral greys
       - header mark "Tea.cc" + "live" -> "Drift"
@@ -29,7 +26,13 @@
         width, name, distance, skeleton, health/armor bars, held tool,
         highlight, team check, text size, max distance - and every row is read
         live by the body embedded below. Drawing primitives only: no fonts, no
-        getcustomasset, no crypt, no remote fetch
+        getcustomasset, no crypt, no remote fetch. Max distance defaults to
+        2000, the top of its range.
+      - adds "super jump" and "fly" to the bottom of misc column 1, each with a
+        toggle, its own keybind and one tuning slider. The bind flips the flag
+        through the widget, so the checkmark and a saved config follow along.
+        Super jump reasserts JumpPower per frame; fly drives a BodyVelocity and
+        BodyGyro on the root with camera-relative WASD, space up, ctrl down.
 
     The window size and the header image live inside the juju source that
     tea.cc fetches, so they are patched at the one point where that source is
@@ -41,7 +44,7 @@
 ]]
 
 local BASE_URL =
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/64a68a677b025b810f2d3b3a693c7b27966f854f/tea_cc.lua"
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/631cce01e830568560198a1c48eb406889de3bd5/tea_cc.lua"
 local FOLDER = "drift"
 local LOGO_PATH = FOLDER .. "/assets/logo.png"
 
@@ -189,7 +192,7 @@ local ESP_MENU = [==[y = block(main, "visuals", 1, y, "esp", {
     { k = "toggle", n = "highlight", f = "esp_highlight", d = false },
     { k = "toggle", n = "team check", f = "esp_team", d = true },
     { k = "slider", n = "text size", f = "esp_text_size", min = 10, max = 24, d = 14 },
-    { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 500 },
+    { k = "slider", n = "max distance", f = "esp_max_distance", min = 50, max = 2000, d = 2000 },
 })
 
 ]==]
@@ -223,6 +226,56 @@ source = lit(
     LOCK_MENU .. "-- configs (juju"
 )
 
+-- ------------------------------------------------------------ movement (menu) ---
+-- Super jump and fly close out misc column 1, under legit macro. Elements are
+-- kept by flag so the runtime's bind toggle can drive the widget itself, which
+-- keeps the checkmark, the flag a config saves and the live feature in step.
+local MOVE_MENU = [==[do
+    local elements = {}
+
+    local function keyed_block(group, tab, side, cursor, title, rows)
+        local height = 20
+        for _, row in ipairs(rows) do
+            height = height + (ROW_HEIGHT[row.k] or 17)
+        end
+
+        local size = math.min(height / TAB_HEIGHT, 1)
+        local section = group:create_section(tab, title, side, size, cursor)
+        if not section then
+            warn("[drift] section failed: " .. tostring(title))
+            return cursor
+        end
+
+        for _, row in ipairs(rows) do
+            elements[row.f] = fill(section, row)
+        end
+
+        return cursor + size
+    end
+
+    y = keyed_block(main, "misc", 1, y, "super jump", {
+        { k = "toggle", n = "enabled", f = "sjump_enabled", d = false },
+        { k = "keybind", n = "bind", f = "sjump_key", d = Enum.KeyCode.J },
+        { k = "slider", n = "jump power", f = "sjump_power", min = 50, max = 500, d = 180 },
+    })
+
+    y = keyed_block(main, "misc", 1, y, "fly", {
+        { k = "toggle", n = "enabled", f = "fly_enabled", d = false },
+        { k = "keybind", n = "bind", f = "fly_key", d = Enum.KeyCode.F },
+        { k = "slider", n = "speed", f = "fly_speed", min = 10, max = 300, d = 80 },
+    })
+
+    getgenv().DriftMoveElements = elements
+end
+
+]==]
+
+source = lit(
+    source,
+    'y = 0\ny = block(main, "misc", 2, y, "interface", {',
+    MOVE_MENU .. 'y = 0\ny = block(main, "misc", 2, y, "interface", {'
+)
+
 -- ------------------------------------------------- camlock / rapid / skin ---
 -- Base-source edits. The aim runtime keeps its flags; camlock renames the block
 -- and adds a mouse button bind on top of the keybind, rapid fire gets a burst
@@ -232,6 +285,13 @@ source = lit(
     source,
     'y = block(main, "combat", 1, y, "aimbot", {',
     'y = block(main, "combat", 1, y, "camlock", {'
+)
+
+source = lit(
+    source,
+    '    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },\n',
+    '    { k = "keybind", n = "aim key", f = "aim_key", d = Enum.KeyCode.Q },\n'
+        .. '    { k = "dropdown", n = "mouse bind", f = "aim_mouse", o = { "None", "Right", "Left" }, d = { "None" } },\n'
 )
 
 source = lit(
@@ -249,10 +309,50 @@ source = lit(
     [==[    { k = "dropdown", n = "skin", f = "skin_choice", o = { "Inferno", "Galaxy", "Matrix", "RedDeath", "GoldGlory" }, d = { "Inferno" }, req = true },]==]
 )
 
--- camlock input is owned by tea.cc: one aim key, defaulting to right mouse,
--- read through is_aim_input across both KeyCode and UserInputType. Drift does
--- not rewrite that path - two writers on the same block was how a rebind used
--- to drift between the edge handler and hold mode.
+-- camlock input: one trigger for both bind styles, used by the edge handler
+-- and by hold mode, so a rebind cannot drift between the two paths.
+source = lit(
+    source,
+    '    -- Toggle mode reads the key as an edge, hold mode reads it as a level.',
+    [==[    local MOUSE_BUTTONS = {
+        Right = Enum.UserInputType.MouseButton2,
+        Left = Enum.UserInputType.MouseButton1,
+    }
+
+    local function aim_button()
+        return MOUSE_BUTTONS[first(fget("aim_mouse", { "None" }), "None")]
+    end
+
+    local function aim_input(input)
+        local button = aim_button()
+        if button then
+            return input.UserInputType == button
+        end
+        return input.KeyCode == key_of(fget("aim_key", Enum.KeyCode.Q))
+    end
+
+    local function aim_held()
+        local button = aim_button()
+        if button then
+            return UserInputService:IsMouseButtonPressed(button)
+        end
+        return key_down(fget("aim_key", Enum.KeyCode.Q))
+    end
+
+    -- Toggle mode reads the key as an edge, hold mode reads it as a level.]==]
+)
+
+source = lit(
+    source,
+    '        if input.KeyCode ~= key_of(fget("aim_key", Enum.KeyCode.Q)) then',
+    '        if not aim_input(input) then'
+)
+
+source = lit(
+    source,
+    '            if key_down(fget("aim_key", Enum.KeyCode.Q)) then',
+    '            if aim_held() then'
+)
 
 -- rapid fire: task.wait floors at one frame, so anything above 60/s fires a
 -- burst per frame instead of asking the scheduler for a sub-frame delay.
@@ -842,7 +942,7 @@ local function build_esp()
         end
         shown = true
 
-        local maxDistance = get("esp_max_distance", 500)
+        local maxDistance = get("esp_max_distance", 2000)
         local teamCheck = get("esp_team", true)
         local textSize = get("esp_text_size", 14)
         local widthScale = get("esp_width", 0.28)
@@ -1404,10 +1504,274 @@ do
 end
 ]==]
 
+-- --------------------------------------------------------- movement (body) ---
+-- Reads sjump_* and fly_* live. Both toggles answer to their own bind: the
+-- runtime flips the flag through the menu widget, so the checkmark, the value
+-- a config saves and the feature state can never disagree.
+local MOVE_RUNTIME = [==[
+-- ================================================================= movement ===
+do
+    local elements = getgenv().DriftMoveElements or {}
+
+    local function get(name, fallback)
+        local ok, value = pcall(fget, name, fallback)
+        if ok and value ~= nil then
+            return value
+        end
+        return fallback
+    end
+
+    local function set_toggle(flag, value)
+        local element = elements[flag]
+        if element and type(element.set_toggle) == "function" then
+            local ok = pcall(function()
+                element:set_toggle(value)
+            end)
+            if ok then
+                return
+            end
+        end
+        flags[flag] = value
+    end
+
+    local function flip(flag)
+        set_toggle(flag, not get(flag, false))
+    end
+
+    -- ------------------------------------------------------------- super jump ---
+    -- JumpPower is reasserted every frame: the game rewrites it on respawn, on
+    -- ragdoll and on any server-side correction, same as WalkSpeed. UseJumpPower
+    -- is forced on because JumpPower is ignored while the height scale owns it.
+    local Jump = { humanoid = nil, power = nil, use_power = nil }
+
+    local function jump_release()
+        local humanoid = Jump.humanoid
+        local power = Jump.power
+        local use_power = Jump.use_power
+        Jump.humanoid, Jump.power, Jump.use_power = nil, nil, nil
+
+        if humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.JumpPower = power or 50
+                humanoid.UseJumpPower = use_power ~= false
+            end)
+        end
+    end
+
+    local function jump_step()
+        local character = Client.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local wanted = humanoid and get("sjump_enabled", false)
+
+        if not wanted then
+            if Jump.humanoid then
+                jump_release()
+            end
+            return
+        end
+
+        if Jump.humanoid ~= humanoid then
+            jump_release()
+            Jump.humanoid = humanoid
+            Jump.power = humanoid.JumpPower
+            Jump.use_power = humanoid.UseJumpPower
+        end
+
+        local power = get("sjump_power", 180)
+        pcall(function()
+            humanoid.UseJumpPower = true
+            humanoid.JumpPower = power
+        end)
+    end
+
+    -- -------------------------------------------------------------------- fly ---
+    -- BodyVelocity + BodyGyro on the root with PlatformStand on while it flies.
+    -- Camera-relative WASD, space up, left control down. Released the frame the
+    -- toggle drops or the character is replaced.
+    local Fly = { body = nil, gyro = nil, root = nil, humanoid = nil }
+
+    local UP = Vector3.new(0, 1, 0)
+
+    local function fly_release()
+        local body, gyro, humanoid = Fly.body, Fly.gyro, Fly.humanoid
+        Fly.body, Fly.gyro, Fly.root, Fly.humanoid = nil, nil, nil, nil
+
+        if body then
+            pcall(function()
+                body:Destroy()
+            end)
+        end
+        if gyro then
+            pcall(function()
+                gyro:Destroy()
+            end)
+        end
+        if humanoid and humanoid.Parent then
+            pcall(function()
+                humanoid.PlatformStand = false
+            end)
+        end
+    end
+
+    local function fly_attach(root, humanoid)
+        local body = Instance.new("BodyVelocity")
+        body.Name = "DriftFlyBody"
+        body.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        body.P = 1250
+        body.Velocity = Vector3.new(0, 0, 0)
+        body.Parent = root
+
+        local gyro = Instance.new("BodyGyro")
+        gyro.Name = "DriftFlyGyro"
+        gyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        gyro.P = 3000
+        gyro.D = 100
+        gyro.CFrame = root.CFrame
+        gyro.Parent = root
+
+        Fly.body, Fly.gyro, Fly.root, Fly.humanoid = body, gyro, root, humanoid
+
+        pcall(function()
+            humanoid.PlatformStand = true
+        end)
+    end
+
+    local function fly_step()
+        local character = Client.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local alive = humanoid and humanoid.Health > 0
+        local wanted = alive and root and get("fly_enabled", false)
+
+        if not wanted then
+            if Fly.body or Fly.gyro or Fly.humanoid then
+                fly_release()
+            end
+            return
+        end
+
+        if Fly.root ~= root
+            or Fly.humanoid ~= humanoid
+            or not Fly.body
+            or not Fly.body.Parent
+            or not Fly.gyro
+            or not Fly.gyro.Parent
+        then
+            fly_release()
+            fly_attach(root, humanoid)
+        end
+
+        local camera = Workspace.CurrentCamera
+        local direction = Vector3.new(0, 0, 0)
+
+        if camera then
+            local look = camera.CFrame.LookVector
+            local right = camera.CFrame.RightVector
+
+            local flat = Vector3.new(look.X, 0, look.Z)
+            if flat.Magnitude > 1e-3 then
+                flat = flat.Unit
+            end
+
+            local flat_right = Vector3.new(right.X, 0, right.Z)
+            if flat_right.Magnitude > 1e-3 then
+                flat_right = flat_right.Unit
+            end
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                direction = direction + flat
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                direction = direction - flat
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                direction = direction + flat_right
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                direction = direction - flat_right
+            end
+        end
+
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            direction = direction + UP
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+            direction = direction - UP
+        end
+
+        if direction.Magnitude > 1 then
+            direction = direction.Unit
+        end
+
+        local speed = get("fly_speed", 80)
+        pcall(function()
+            Fly.body.Velocity = direction * speed
+            if camera then
+                Fly.gyro.CFrame = CFrame.new(root.Position) * (camera.CFrame - camera.CFrame.Position)
+            else
+                Fly.gyro.CFrame = CFrame.new(root.Position)
+            end
+        end)
+    end
+
+    -- ------------------------------------------------------------------ binds ---
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then
+            return
+        end
+
+        if input.KeyCode == key_of(get("sjump_key", Enum.KeyCode.J)) then
+            flip("sjump_enabled")
+        elseif input.KeyCode == key_of(get("fly_key", Enum.KeyCode.F)) then
+            flip("fly_enabled")
+        end
+    end)
+
+    local connection = RunService.RenderStepped:Connect(function()
+        pcall(jump_step)
+        pcall(fly_step)
+    end)
+
+    local function stop()
+        if connection then
+            pcall(function()
+                connection:Disconnect()
+            end)
+            connection = nil
+        end
+
+        if Fly.body or Fly.gyro or Fly.humanoid then
+            fly_release()
+        end
+        if Jump.humanoid then
+            jump_release()
+        end
+    end
+
+    getgenv().DriftMove = {
+        toggle = flip,
+        set = set_toggle,
+        stop = stop,
+    }
+
+    -- tea.cc installs TeaUnload after this point, so the chain is wrapped once
+    -- the chunk has finished rather than read here.
+    task.defer(function()
+        local previous = getgenv().TeaUnload
+        getgenv().TeaUnload = function()
+            if previous then
+                pcall(previous)
+            end
+            pcall(stop)
+        end
+    end)
+end
+]==]
+
 source = lit(
     source,
     "-- ----------------------------------------------------------------- finish ---",
-    LOCK_RUNTIME .. SKIN_RUNTIME .. espChunk .. "-- ----------------------------------------------------------------- finish ---"
+    LOCK_RUNTIME .. SKIN_RUNTIME .. MOVE_RUNTIME .. espChunk .. "-- ----------------------------------------------------------------- finish ---"
 )
 
 -- --------------------------------------------------------- juju ui edits ---
@@ -1465,21 +1829,11 @@ if type(source) == "string" then
 end
 ]==]
 
--- Anchor: tea.cc now resolves juju through a disk cache, so its old okFetch
--- line is gone. The recolour helper below the fetch is required by every
--- colour edit, which makes it the stable seam for the juju-side patch.
-local UI_ANCHOR = "local function swap(text, find, replace)"
-local patched = lit(source, UI_ANCHOR, UI_PATCH .. "\n" .. UI_ANCHOR)
-
-if patched == source or not patched:find("690", 1, true) then
-    -- juju is still 575x450, so the 532 content height would size every
-    -- section too short and push its rows past their boxes. Put the layout
-    -- back instead of shipping a menu with checkboxes hanging off the bottom.
-    source = lit(source, "local TAB_HEIGHT = 532", "local TAB_HEIGHT = 430")
-    warn("[drift] juju ui patch did not apply - menu left at stock 575x450")
-else
-    source = patched
-end
+source = lit(
+    source,
+    'if not okFetch or type(source) ~= "string" or #source < 1000 then',
+    UI_PATCH .. '\nif not okFetch or type(source) ~= "string" or #source < 1000 then'
+)
 
 -- ----------------------------------------------------------------- compile --
 local chunk, compileError = loadstring(source)
