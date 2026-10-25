@@ -192,7 +192,7 @@ local function block(group, tab, side, cursor, title, rows)
 end
 
 -- ------------------------------------------------------------------ build ---
-local VERSION = "2026-10-25c"
+local VERSION = "2026-10-25d"
 
 local main = menu.create_group("main")
 main:create_tab("combat")
@@ -1259,7 +1259,14 @@ end
 -- turning camlock off does not stop the spin. The root is anchored while the
 -- circle runs, which is what stops knock physics from pulling the character
 -- out of the ring.
-local Orbit = { active = false, target = nil, angle = 0, auto_rotate = true }
+local Orbit = {
+    active = false,
+    target = nil,
+    angle = 0,
+    auto_rotate = true,
+    auto_state = nil,
+    last_position = nil,
+}
 
 do
     local vector_zero = Vector3.zero
@@ -1320,9 +1327,16 @@ do
         end
         if humanoid then
             humanoid.AutoRotate = Orbit.auto_rotate
+            if Orbit.auto_state then
+                pcall(function()
+                    humanoid:ChangeState(Orbit.auto_state)
+                end)
+            end
         end
         Orbit.active = false
         Orbit.target = nil
+        Orbit.auto_state = nil
+        Orbit.last_position = nil
     end
 
     local function engage()
@@ -1337,12 +1351,26 @@ do
             return
         end
 
+        -- Never anchor the root. An anchored part is skipped by the physics
+        -- replicator, so the server keeps the pre-orbit pose and every other
+        -- client sees you standing still while your own screen circles - the
+        -- frozen-on-their-screen bug. The local client owns this assembly, so
+        -- motion written through the physics stream is what replicates.
+        my_root.Anchored = false
+
         Orbit.auto_rotate = humanoid.AutoRotate
+        Orbit.auto_state = humanoid:GetState()
         humanoid.AutoRotate = false
-        my_root.Anchored = true
+
+        -- Physics state stops the humanoid's own state machine (Running applies
+        -- motor velocity) from fighting the circle while it runs.
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+        end)
 
         Orbit.target = target
         Orbit.angle = 0
+        Orbit.last_position = my_root.Position
         Orbit.active = true
     end
 
@@ -1415,7 +1443,20 @@ do
         )
 
         my_root.CFrame = CFrame.lookAt(position, anchor)
-        my_root.AssemblyLinearVelocity = vector_zero
+
+        -- CFrame is the local view; the velocity echo is the replication. A
+        -- client owns its own character, so the server integrates whatever
+        -- velocity is set here and relays the result to every other client.
+        -- Gravity is cancelled because the echo is rewritten every frame.
+        local previous = Orbit.last_position or position
+        Orbit.last_position = position
+        local safe_dt = math.max(dt, 1 / 240)
+        local echo = (position - previous) / safe_dt
+        if echo.Magnitude > 200 then
+            echo = echo.Unit * 200
+        end
+
+        my_root.AssemblyLinearVelocity = echo
         my_root.AssemblyAngularVelocity = vector_zero
     end
 
