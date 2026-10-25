@@ -244,11 +244,29 @@ y = block(main, "visuals", 1, y, "player esp", {
     { k = "slider", n = "max distance", f = "esp_max_distance", min = 0, max = 2000, d = 500 },
 })
 
+y = block(main, "visuals", 1, y, "weather", {
+    { k = "dropdown", n = "type", f = "world_weather", o = { "None", "Snow", "Rain", "Storm" }, d = { "None" }, req = true },
+    { k = "slider", n = "density", f = "world_weather_rate", min = 0, max = 100, d = 55 },
+    { k = "slider", n = "size", f = "world_weather_size", min = 0.2, max = 4, d = 1, dec = 1 },
+    { k = "slider", n = "fall speed", f = "world_weather_speed", min = 20, max = 200, d = 100 },
+    { k = "slider", n = "wind", f = "world_weather_wind", min = -80, max = 80, d = 14 },
+    { k = "colorpicker", n = "colour", f = "world_weather_color", d = Color3.fromRGB(235, 244, 255) },
+    { k = "toggle", n = "lightning", f = "world_lightning", d = false },
+})
+
 y = 0
 y = block(main, "visuals", 2, y, "world", {
+    { k = "dropdown", n = "lighting", f = "world_preset", o = { "Off", "Red", "Night", "Overcast", "Storm", "Dusk", "Void" }, d = { "Off" }, req = true },
+    { k = "colorpicker", n = "sky tint", f = "world_sky_top", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ground tint", f = "world_sky_bottom", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "ambient", f = "world_ambient", d = Color3.fromRGB(255, 255, 255) },
+    { k = "colorpicker", n = "fog", f = "world_fog", d = Color3.fromRGB(255, 255, 255) },
+    { k = "slider", n = "brightness", f = "world_brightness", min = 0, max = 4, d = 2, dec = 2 },
+    { k = "slider", n = "time of day", f = "world_clock", min = 0, max = 24, d = 14, dec = 1 },
+    { k = "slider", n = "fog distance", f = "world_fog_end", min = 0, max = 5000, d = 800 },
+    { k = "slider", n = "exposure", f = "world_exposure", min = -3, max = 3, d = 0, dec = 2 },
     { k = "toggle", n = "fullbright", f = "world_fullbright", d = false },
     { k = "toggle", n = "remove fog", f = "world_no_fog", d = false },
-    { k = "slider", n = "time of day", f = "world_time", min = 0, max = 24, d = 14, dec = 1 },
 })
 
 -- misc -----------------------------------------------------------------
