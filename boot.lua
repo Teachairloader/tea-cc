@@ -21,7 +21,7 @@
 
 local GATE_SOURCES = {
     "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/gate.lua",
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/49f1c61853ae265fd77445099fff9b3f323247ba/gate.lua",
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/eb42dbac9b3a06822f831af31d139e835dd9cc64/gate.lua",
 }
 
 -- gate.lua is the loading screen only now that the key list is gone, so the
