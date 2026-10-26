@@ -30,9 +30,11 @@ local SOFT_DOT = "rbxassetid://1316045217"
 local RUN_LOADER = true
 
 -- bar pacing: SHOW_RATE is how many seconds of work map to 94%, MIN_SHOW is the
--- floor so a warm start doesn't blink the screen.
-local SHOW_RATE = 2.2
-local MIN_SHOW = 1.2
+-- floor so a warm start doesn't blink the screen. Baked here rather than patched
+-- in from boot.lua so the gate can be sealed: boot's literal replacements simply
+-- miss and these values stand.
+local SHOW_RATE = 3.2
+local MIN_SHOW = 2.2
 
 -- The repo copy is first and permanent. A Discord attachment URL carries an
 -- expiry in `ex`, so the second entry is only a stopgap for the day the repo
