@@ -6,15 +6,17 @@
     Flow:
         1. gate.lua puts the loading screen up on the first frame. No key screen,
            no key list fetch: the gate opens on the bar.
-        2. The bar runs loader.lua, which pulls drift.lua, which patches tea.cc
-           and builds the menu. The bar is paced against that work, so it covers
-           the whole load instead of blinking.
+        2. The bar runs loader.lua, which drops the logo asset, pulls the
+           obfuscated menu and compiles it. The bar is paced against that work,
+           so it covers the whole load instead of blinking.
         3. Nothing loads after the menu opens. World, weather, skin changer and
            legit macro are sections of the misc tab, anti lock, cframe speed,
-           fake macro, orbit, super jump and fly are the rage tab, all inside
-           drift, so there is no addon pass and no ordering race.
+           fake macro, orbit, super jump and fly are the rage tab, all baked into
+           menu.lua, so there is no addon pass and no ordering race.
 
-    loader.lua -> drift.lua -> tea.cc is a straight line with no path back here.
+    loader.lua -> menu.lua is a straight line with no path back here. drift.lua
+    in this repo is the patch source that regenerates menu.plain.lua, not part of
+    the load any more.
 ]]
 
 local GATE_SOURCES = {
