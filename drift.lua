@@ -17,10 +17,13 @@
       - skin changer: material/colour/transparency rows replaced by a skin
         dropdown (Inferno, Galaxy, Matrix, RedDeath, GoldGlory) driving the
         weapon texture sets in the skin runtime below
-      - adds an "anti lock" section on visuals column 2, under crosshair: toggle
-        enabled runs a one-frame root desync followed by a ping-length
-        NetworkIsSleeping choke (velocity restored every pass); toggle resolver
-        holds every other player's root at zero vertical velocity
+      - adds a "rage" tab between visuals and misc, both columns: anti lock,
+        cframe speed and fake macro down column 1, orbit, super jump and fly
+        down column 2. anti lock keeps its two flags: toggle enabled runs a
+        one-frame root desync followed by a ping-length NetworkIsSleeping choke
+        (velocity restored every pass); toggle resolver holds every other
+        player's root at zero vertical velocity. The block moved off visuals
+        column 2 to make room for the tab.
       - esp: the stock "player esp" block on visuals column 1 had rows but no
         runtime behind them. That block is now the only esp block - box, box
         width, name, distance, skeleton, health/armor bars, held tool,
@@ -28,7 +31,7 @@
         live by the body embedded below. Drawing primitives only: no fonts, no
         getcustomasset, no crypt, no remote fetch. Max distance defaults to
         2000, the top of its range.
-      - adds "super jump" and "fly" to the bottom of misc column 2, each with a
+      - adds "super jump" and "fly" to the bottom of rage column 2, each with a
         toggle, its own keybind and one tuning slider. The bind flips the flag
         through the widget, so the checkmark and a saved config follow along.
         Super jump reasserts JumpPower per frame; fly drives a BodyVelocity and
@@ -114,8 +117,9 @@ end)
 
 -- Direct image URL wins over both the cache and the embedded fallback: set it
 -- once and every load re-pulls the exact file. Empty string = use the cache,
--- then the embedded mark.
-local LOGO_URL = "https://media.discordapp.net/attachments/1537736136141701151/1563713376952262778/Logo.png.png?ex=6adea111&is=6add4f91&hm=3590194de36fd4f8fd295ad537f7e939192c2902e9ef44b73e60295ba2d3cd89&=&format=png"
+-- then the embedded mark. This points at the repo copy, not the Discord CDN:
+-- a Discord attachment URL carries an expiry in `ex` and dies with it.
+local LOGO_URL = "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/assets/logo.png"
 
 local logo_ready = false
 
@@ -207,10 +211,6 @@ y = block(main, "visuals", 2, y, "crosshair", {
     { k = "toggle", n = "spin", f = "crosshair_spin", d = true },
     { k = "toggle", n = "resize", f = "crosshair_resize", d = true },
 })
-y = block(main, "visuals", 2, y, "anti lock", {
-    { k = "toggle", n = "enabled", f = "misc_antilock", d = false },
-    { k = "toggle", n = "resolver", f = "misc_resolver", d = false },
-})
 y = block(main, "visuals", 2, y, "avatar", {
     { k = "toggle", n = "aura", f = "avatar_aura", d = false },
     { k = "toggle", n = "china hat", f = "avatar_china_hat", d = false },
@@ -232,6 +232,16 @@ source = lit(
     ESP_MENU
 )
 
+-- ----------------------------------------------------------- rage (tab) ---
+-- "rage" is a tab of its own, between visuals and misc. The tab is created here,
+-- before any section asks for it, because create_section returns nil for a tab
+-- that does not exist yet.
+source = lit(
+    source,
+    'main:create_tab("visuals")\nmain:create_tab("misc")',
+    'main:create_tab("visuals")\nmain:create_tab("rage")\nmain:create_tab("misc")'
+)
+
 -- ------------------------------------------------------------ layout (menu) ---
 -- The extras used to open as their own window over the menu. They are sections
 -- of the misc tab now: world, weather and cframe speed down column 1, the
@@ -239,9 +249,10 @@ source = lit(
 -- so there is no second ScreenGui to close and no ordering race between the menu
 -- being built and the extras arriving.
 --
--- Interface, crosshair, anti lock and avatar move to visuals column 2. That is
--- window chrome sitting on the visuals tab, and the space it frees is what lets
--- the whole misc tab fit one content area.
+-- Interface, crosshair and avatar move to visuals column 2. That is window
+-- chrome sitting on the visuals tab, and the space it frees is what lets the
+-- whole misc tab fit one content area. Anti lock left both tabs - it lives on
+-- rage now.
 local WEATHER_OLD = [==[y = block(main, "visuals", 1, y, "weather", {
     { k = "dropdown", n = "type", f = "world_weather", o = { "None", "Snow", "Rain", "Storm" }, d = { "None" }, req = true },
     { k = "slider", n = "density", f = "world_weather_rate", min = 0, max = 100, d = 55 },
@@ -348,25 +359,7 @@ y = block(main, "misc", 1, y, "weather", {
     { k = "colorpicker", n = "colour", f = "world_weather_color", d = Color3.fromRGB(235, 244, 255) },
     { k = "toggle", n = "lightning", f = "world_lightning", d = false },
 })
-y = block(main, "misc", 1, y, "fake macro", {
-    { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
-    { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
-})
-y = block(main, "misc", 1, y, "cframe speed", {
-    { k = "toggle", n = "enabled", f = "cspeed_enabled", d = false },
-    { k = "keybind", n = "bind", f = "cspeed_key", d = Enum.KeyCode.LeftAlt },
-    { k = "slider", n = "speed", f = "cspeed_value", min = 10, max = 400, d = 60, suffix = " s/s" },
-    { k = "toggle", n = "hold", f = "cspeed_hold", d = false },
-})
-
 y = 0
-y = block(main, "misc", 2, y, "orbit", {
-    { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
-    { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
-    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
-    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
-    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
-})
 y = block(main, "misc", 2, y, "skin changer", {
     { k = "toggle", n = "enabled", f = "skin_enabled", d = false },
     { k = "dropdown", n = "material", f = "skin_material", o = { "ForceField", "Keep", "Neon", "Glass", "Plastic", "SmoothPlastic", "Metal", "Ice" }, d = { "ForceField" }, req = true },
@@ -378,8 +371,42 @@ y = block(main, "misc", 2, y, "legit macro", {
     { k = "keybind", n = "bind", f = "legit_key", d = Enum.KeyCode.X },
     { k = "slider", n = "delay", f = "legit_delay", min = 0, max = 200, d = 0, suffix = "ms" },
 })
+
+]==]
+
+-- The rage tab: anti lock, cframe speed and fake macro down column 1, orbit,
+-- super jump and fly down column 2. Flag names are untouched, so the runtimes
+-- below (anti lock, movement) keep reading the same keys - only the tab that
+-- owns the widget moved. Super jump and fly stay keyed blocks: the movement
+-- runtime drives their checkmarks through DriftMoveElements, so the elements
+-- table has to be published from the same do-block that builds them.
+local RAGE_NEW = [==[-- rage -----------------------------------------------------------------
+y = 0
+y = block(main, "rage", 1, y, "anti lock", {
+    { k = "toggle", n = "enabled", f = "misc_antilock", d = false },
+    { k = "toggle", n = "resolver", f = "misc_resolver", d = false },
+})
+y = block(main, "rage", 1, y, "cframe speed", {
+    { k = "toggle", n = "enabled", f = "cspeed_enabled", d = false },
+    { k = "keybind", n = "bind", f = "cspeed_key", d = Enum.KeyCode.LeftAlt },
+    { k = "slider", n = "speed", f = "cspeed_value", min = 10, max = 400, d = 60, suffix = " s/s" },
+    { k = "toggle", n = "hold", f = "cspeed_hold", d = false },
+})
+y = block(main, "rage", 1, y, "fake macro", {
+    { k = "toggle", n = "enabled", f = "macro_enabled", d = false },
+    { k = "slider", n = "walkspeed", f = "macro_walkspeed", min = 16, max = 500, d = 100 },
+})
+
+y = 0
+y = block(main, "rage", 2, y, "orbit", {
+    { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
+    { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
+    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
+    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
+    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
+})
 do
-    local elements = {}
+    local elements = getgenv().DriftMoveElements or {}
 
     local function keyed_block(group, tab, side, cursor, title, rows)
         local height = 20
@@ -401,13 +428,13 @@ do
         return cursor + size
     end
 
-    y = keyed_block(main, "misc", 2, y, "super jump", {
+    y = keyed_block(main, "rage", 2, y, "super jump", {
         { k = "toggle", n = "enabled", f = "sjump_enabled", d = false },
         { k = "keybind", n = "bind", f = "sjump_key", d = Enum.KeyCode.J },
         { k = "slider", n = "jump power", f = "sjump_power", min = 50, max = 500, d = 180 },
     })
 
-    y = keyed_block(main, "misc", 2, y, "fly", {
+    y = keyed_block(main, "rage", 2, y, "fly", {
         { k = "toggle", n = "enabled", f = "fly_enabled", d = false },
         { k = "keybind", n = "bind", f = "fly_key", d = Enum.KeyCode.F },
         { k = "slider", n = "speed", f = "fly_speed", min = 10, max = 300, d = 80 },
@@ -453,6 +480,16 @@ end
 
 source = swap_pairs(source, VISUAL_LAYOUT, true)
 source = swap_pairs(source, MISC_LAYOUT, true)
+
+-- Rage is inserted whole rather than swapped: the tab does not exist upstream,
+-- so there is no old text to find. The anchor is the config setup that closes
+-- the menu layout, so every tab's sections sit above it and the insert lands
+-- after misc without touching a block above.
+source = lit(
+    source,
+    "-- configs (juju's own config list, info and editor) ---------------------",
+    RAGE_NEW .. "\n-- configs (juju's own config list, info and editor) ---------------------"
+)
 
 
 -- ------------------------------------------------- camlock / rapid / skin ---
