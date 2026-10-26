@@ -401,9 +401,9 @@ y = 0
 y = block(main, "rage", 2, y, "orbit", {
     { k = "toggle", n = "enabled", f = "orbit_enabled", d = false },
     { k = "keybind", n = "bind", f = "orbit_key", d = Enum.KeyCode.Q },
-    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 6.5, dec = 1 },
-    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 2.2, dec = 1 },
-    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 32 },
+    { k = "slider", n = "height", f = "orbit_height", min = 0, max = 16, d = 5.4, dec = 1 },
+    { k = "slider", n = "radius", f = "orbit_radius", min = 0.5, max = 8, d = 8, dec = 1 },
+    { k = "slider", n = "speed", f = "orbit_speed", min = 5, max = 80, d = 12 },
 })
 do
     local elements = getgenv().DriftMoveElements or {}
@@ -577,6 +577,26 @@ source = lit(
     source,
     '            if key_down(fget("aim_key", Enum.KeyCode.Q)) then',
     '            if aim_held() then'
+)
+
+-- orbit runtime fallbacks. The menu always writes these flags, so the fallback
+-- only fires on a missing key - but a saved config from before the rage move can
+-- still hold the old numbers, so the fallbacks now match the menu defaults
+-- (height 5.4, radius 8, speed 12).
+source = lit(
+    source,
+    '        local height = fget("orbit_height", 6.5)',
+    '        local height = fget("orbit_height", 5.4)'
+)
+source = lit(
+    source,
+    '        Orbit.angle = (Orbit.angle + fget("orbit_speed", 32) * dt) % (math.pi * 2)',
+    '        Orbit.angle = (Orbit.angle + fget("orbit_speed", 12) * dt) % (math.pi * 2)'
+)
+source = lit(
+    source,
+    '        local radius = fget("orbit_radius", 2.2)',
+    '        local radius = fget("orbit_radius", 8)'
 )
 
 -- rapid fire: task.wait floors at one frame, so anything above 60/s fires a
