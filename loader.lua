@@ -6,7 +6,7 @@
 
 local SOURCES = {
     "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/drift.lua",
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/d59c66fc169c5002cbee77a842608e666eee54bb/drift.lua",
+    "https://raw.githubusercontent.com/Teachairloader/tea-cc/49f1c61853ae265fd77445099fff9b3f323247ba/drift.lua",
 }
 
 local MIN_SIZE = 20000
