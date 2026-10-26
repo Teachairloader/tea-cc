@@ -1,29 +1,30 @@
 --[[
-    tea.cc boot - one paste, gate first
+    tea.cc boot - one paste, straight to the bar
 
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Teachairloader/tea-cc/main/boot.lua"))()
 
     Flow:
-        1. gate.lua draws the key screen.
-        2. Key accepted -> gate's loading layer runs loader.lua, which pulls
-           drift.lua, which patches tea.cc and builds the menu. The bar is paced
-           against that work, so it covers the whole load instead of blinking.
-        3. Nothing loads after the menu opens. The extras (world, weather,
-           cframe speed, orbit) are sections of the misc tab inside drift, not a
-           second window, so there is no addon pass and no ordering race.
+        1. gate.lua puts the loading screen up on the first frame. No key screen,
+           no key list fetch: the gate opens on the bar.
+        2. The bar runs loader.lua, which pulls drift.lua, which patches tea.cc
+           and builds the menu. The bar is paced against that work, so it covers
+           the whole load instead of blinking.
+        3. Nothing loads after the menu opens. World, weather, skin changer and
+           legit macro are sections of the misc tab, anti lock, cframe speed,
+           fake macro, orbit, super jump and fly are the rage tab, all inside
+           drift, so there is no addon pass and no ordering race.
 
-    This file used to run drift itself and then a standalone tea-extras window
-    after the gate's loader was switched off. Both are gone: the gate owns the
-    chain again, and the extras live in the menu. loader.lua -> drift.lua ->
-    tea.cc is a straight line with no path back here.
+    loader.lua -> drift.lua -> tea.cc is a straight line with no path back here.
 ]]
 
 local GATE_SOURCES = {
     "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/gate.lua",
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/78d1352bf6595af9a27647b8059b6b4f159290c9/gate.lua",
 }
 
-local MIN_SIZE = 20000
+-- gate.lua is the loading screen only now that the key list is gone, so the
+-- floor dropped from 20kb to 4kb. Anything under this is a truncated body or an
+-- error page, not the file.
+local MIN_SIZE = 4000
 
 -- bar pacing, patched into the gate: SHOW_RATE is how many seconds of work map
 -- to 94% of the bar, MIN_SHOW is the floor so a warm start still shows a load
