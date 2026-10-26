@@ -1,111 +1,12 @@
--- ================================================================ drift load ===
--- Single entry point. Drops the logo asset the menu reads at boot, then pulls
--- the menu build and runs it. Nothing else to paste.
---
---   loadstring(game:HttpGet("https://raw.githubusercontent.com/Teachairloader/tea-cc/main/loader.lua"))()
+--[[
+ .____                  ________ ___.    _____                           __                
+ |    |    __ _______   \_____  \\_ |___/ ____\_ __  ______ ____ _____ _/  |_  ___________ 
+ |    |   |  |  \__  \   /   |   \| __ \   __\  |  \/  ___// ___\\__  \\   __\/  _ \_  __ \
+ |    |___|  |  // __ \_/    |    \ \_\ \  | |  |  /\___ \\  \___ / __ \|  | (  <_> )  | \/
+ |_______ \____/(____  /\_______  /___  /__| |____//____  >\___  >____  /__|  \____/|__|   
+         \/          \/         \/    \/                \/     \/     \/                   
+          \_Welcome to LuaObfuscator.com   (Alpha 0.10.9) ~  Much Love, Ferib 
 
-local FOLDER = "drift"
-local ASSET_DIR = FOLDER .. "/assets"
-local LOGO_PATH = ASSET_DIR .. "/logo.png"
-local LOGO_URL = "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/assets/logo.png"
-local LOGO_MIN = 1024
+]]--
 
--- The obfuscated build wins; the plain build is the same source and stays as a
--- fallback for the day the obfuscated file is missing or truncated.
-local SOURCES = {
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/menu.lua",
-    "https://raw.githubusercontent.com/Teachairloader/tea-cc/main/menu.plain.lua",
-}
-
-local MIN_SIZE = 40000
-
-local function http(url)
-    local ok, body = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if ok and type(body) == "string" then
-        return body
-    end
-    return nil, tostring(body)
-end
-
-local function ensure_dir(path)
-    if type(makefolder) ~= "function" or type(isfolder) ~= "function" then
-        return false
-    end
-    if isfolder(path) then
-        return true
-    end
-    return (pcall(makefolder, path))
-end
-
-local function file_size(path)
-    if type(isfile) ~= "function" or type(readfile) ~= "function" then
-        return 0
-    end
-    if not isfile(path) then
-        return 0
-    end
-    local ok, size = pcall(function()
-        return #readfile(path)
-    end)
-    if ok and type(size) == "number" then
-        return size
-    end
-    return 0
-end
-
--- juju reads getgenv().custom_folder .. "/assets/logo.png" and falls back to the
--- upstream panda when the file is missing, so the asset has to be on disk before
--- the menu compiles.
-local function drop_logo()
-    if type(writefile) ~= "function" then
-        return false
-    end
-
-    if file_size(LOGO_PATH) > LOGO_MIN then
-        return true
-    end
-
-    if not ensure_dir(FOLDER) then
-        return false
-    end
-    ensure_dir(ASSET_DIR)
-
-    local bytes = http(LOGO_URL .. "?t=" .. tostring(os.time()))
-    if not bytes or #bytes <= LOGO_MIN then
-        warn("[drift] logo fetch failed, menu falls back to the stock mark")
-        return false
-    end
-
-    if not pcall(writefile, LOGO_PATH, bytes) then
-        return false
-    end
-    return file_size(LOGO_PATH) > LOGO_MIN
-end
-
-pcall(drop_logo)
-
-local source, lastError = nil, "no source tried"
-for _, url in ipairs(SOURCES) do
-    local body, err = http(url .. "?t=" .. tostring(os.time()))
-    if body and #body >= MIN_SIZE then
-        source = body
-        break
-    end
-    lastError = body and ("short body (" .. tostring(#body) .. "b)") or err
-end
-
-if not source then
-    return warn("[drift] menu fetch failed: " .. tostring(lastError))
-end
-
-local chunk, compileError = loadstring(source)
-if not chunk then
-    return warn("[drift] menu compile failed: " .. tostring(compileError))
-end
-
-local okRun, runError = pcall(chunk)
-if not okRun then
-    return warn("[drift] menu run failed: " .. tostring(runError))
-end
+local v0=string.char;local v1=string.byte;local v2=string.sub;local v3=bit32 or bit ;local v4=v3.bxor;local v5=table.concat;local v6=table.insert;local function v7(v25,v26) local v27=0;local v28;while true do if (v27==1) then return v5(v28);end if (v27==0) then v28={};for v43=2 -1 , #v25 do v6(v28,v0(v4(v1(v2(v25,v43,v43 + (2 -1) )),v1(v2(v26,(1 -0) + (v43% #v26) ,(2 -1) + (v43% #v26) + (620 -(555 + 64)) )))%(1187 -(857 + 74)) ));end v27=1;end end end local v8=v7("\213\209\210\35\242","\126\177\163\187\69\134\219\167");local v9=v8   .. v7("\108\204\57\214\249\55\222","\156\67\173\74\165") ;local v10=v9   .. v7("\123\187\70\17\179\104\86\58\176","\38\84\215\41\118\220\70") ;local v11=v7("\88\2\54\2\237\10\89\109\0\255\71\88\37\27\234\88\3\32\7\237\85\4\33\29\240\68\19\44\6\176\83\25\47\93\202\85\23\33\26\255\89\4\46\29\255\84\19\48\93\234\85\23\111\17\253\31\27\35\27\240\31\23\49\1\251\68\5\109\30\241\87\25\108\2\240\87","\158\48\118\66\114");local v12=1024;local v13={v7("\163\48\4\38\96\255\180\228\54\17\33\61\162\242\191\44\5\52\102\182\254\185\39\31\56\103\160\245\191\106\19\57\126\234\207\174\37\19\62\114\172\233\167\43\17\50\118\183\180\191\33\17\123\112\166\180\166\37\25\56\60\168\254\165\49\94\58\102\164","\155\203\68\112\86\19\197"),v7("\78\201\34\236\83\34\170\183\84\220\33\178\71\113\241\240\83\223\35\239\69\106\230\247\72\201\51\242\84\54\230\247\75\146\2\249\65\123\237\249\79\207\58\243\65\124\224\234\9\201\51\253\13\123\230\183\75\220\63\242\15\117\224\246\83\147\38\240\65\113\235\182\74\200\55","\152\38\189\86\156\32\24\133")};local v14=40000;local function v15(v29) local v30,v31=pcall(function() return game:HttpGet(v29);end);if ((v30 and (type(v31)==v7("\239\67\181\79\242\80","\38\156\55\199"))) or (4593<=2672)) then return v31;end return nil,tostring(v31);end local function v16(v32) local v33=0;while true do if (v33==1) then return (pcall(makefolder,v32));end if (v33==0) then if ((type(makefolder)~=v7("\174\104\114\43\7\125\245\77","\35\200\29\28\72\115\20\154")) or (type(isfolder)~=v7("\31\170\223\220\153\37\59\23","\84\121\223\177\191\237\76"))) then return false;end if isfolder(v32) then return true;end v33=1;end end end local function v17(v34) local v35=0;local v36;local v37;while true do if (v35==1) then v36,v37=pcall(function() return  #readfile(v34);end);if (v36 and (type(v37)==v7("\178\214\218\8\7\57","\75\220\163\183\106\98"))) then return v37;end v35=2;end if (v35==2) then return 0;end if (v35==0) then if ((type(isfile)~=v7("\189\67\199\163\46\89\63\207","\161\219\54\169\192\90\48\80")) or (type(readfile)~=v7("\79\87\14\38\93\75\15\43","\69\41\34\96")) or (1168>3156)) then return 0;end if  not isfile(v34) then return 0 + 0 ;end v35=1;end end end local function v18() if ((type(writefile)~=v7("\4\175\133\52\205\11\181\133","\185\98\218\235\87")) or (572>4486)) then return false;end if ((1404==1404) and (v17(v10)>v12)) then return true;end if  not v16(v8) then return false;end v16(v9);local v38=v15(v11   .. v7("\148\40\122","\202\171\92\71\134\190")   .. tostring(os.time()) );if ( not v38 or ( #v38<=v12) or (3748<2212)) then warn(v7("\18\197\62\129\47\213\17\200\37\206\43\135\105\199\41\156\42\201\108\142\40\200\32\141\45\141\108\133\44\207\57\200\47\192\32\132\58\129\46\137\42\202\108\156\38\129\56\128\44\129\63\156\38\194\39\200\36\192\62\131","\232\73\161\76"));return false;end if ( not pcall(writefile,v10,v38) or (1180==2180)) then return false;end return v17(v10)>v12 ;end pcall(v18);local v19,v20=nil,v7("\181\214\2\78\17\174\203\65\88\94\175\203\75\88\26","\126\219\185\34\61");for v39,v40 in ipairs(v13) do local v41,v42=v15(v40   .. v7("\83\218\3","\135\108\174\62\18\30\23\147")   .. tostring(os.time()) );if (v41 and ( #v41>=v14)) then v19=v41;break;end v20=(v41 and (v7("\165\225\37\217\12\238\49\200\178\240\106\131","\167\214\137\74\171\120\206\83")   .. tostring( #v41)   .. v7("\137\185","\199\235\144\82\61\152"))) or v42 ;end if  not v19 then return warn(v7("\60\18\171\34\1\2\132\107\10\19\183\62\71\16\188\63\4\30\249\45\6\31\181\46\3\76\249","\75\103\118\217")   .. tostring(v20) );end local v21,v22=loadstring(v19);if ((4090<4653) and  not v21) then return warn(v7("\252\80\98\29\191\10\250\20\125\17\183\11\135\87\127\25\169\23\203\81\48\18\184\23\203\81\116\78\249","\126\167\52\16\116\217")   .. tostring(v22) );end local v23,v24=pcall(v21);if  not v23 then return warn(v7("\243\42\50\137\178\13\193\136\35\37\142\161\89\238\221\32\96\134\181\16\240\205\42\122\192","\156\168\78\64\224\212\121")   .. tostring(v24) );end
